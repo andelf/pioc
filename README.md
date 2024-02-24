@@ -9,6 +9,7 @@ The PIOC(Programmable Protocol I/O Microcontroller) of CH32X035/4/3 and CH643.
 ## Specification
 
 - `RISC8B` instruction set, embedded [CH537]?
+- Official Assembler: MCU CH53X ASSEMBLER
 - 2K code ROM*(4KB in SRAM), 49 SFR, PWM timer/counter
 - 2 I/O ports
 - single cycle instruction(almost)
