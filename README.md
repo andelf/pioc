@@ -2,6 +2,14 @@
 
 The PIOC(Programmable Protocol I/O Microcontroller) of CH32X035/4/3 and CH643.
 
+## WIP
+
+- [x] OpCodes and AST
+- [ ] Assemler
+- [x] Disassembler
+- [x] Pretty Printer for Program
+- [ ] proc-macro for inline PIOC program
+
 ## Documentation
 
 [Official Support BBS: Link to PIOC.zip, The docs, assembler, and examples](https://www.wch.cn/bbs/thread-111140-1.html)
@@ -16,3 +24,4 @@ The PIOC(Programmable Protocol I/O Microcontroller) of CH32X035/4/3 and CH643.
 - max 48MHz clock
 
 [CH537]: https://www.wch-ic.com/products/CH537.html
+
