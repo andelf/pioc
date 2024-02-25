@@ -14,8 +14,7 @@ fn main() {
         program.push(opcode);
     }
 
-
-    for op in program {
-        println!("\t{}", op.to_wch_risc8b_asm());
+    for (loc, op) in program.iter().enumerate() {
+        println!(".L{}\t\t{}", loc, op.to_wch_risc8b_asm());
     }
 }
