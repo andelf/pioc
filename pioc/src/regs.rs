@@ -129,7 +129,8 @@ pub enum SFR {
 /// Display as the same as Debug
 impl fmt::Display for SFR {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SFR::{:?}", self)
+        // write!(f, "SFR::{:?}", self)
+        write!(f, "${}", self.to_name())
     }
 }
 
@@ -139,6 +140,97 @@ impl SFR {
             unsafe { std::mem::transmute(val) }
         } else {
             SFR::Error
+        }
+    }
+
+    pub fn to_name(&self) -> &'static str {
+        match self {
+            SFR::ProgramCounter => "PC",
+            SFR::Status => "SR",
+            SFR::IndirPort1 => "IP1",
+            SFR::IndirPort2 => "IP2",
+            SFR::IndirAddr1 => "IA1",
+            SFR::IndirAddr2 => "IA2",
+            SFR::TimerCount => "TMRCNT",
+            SFR::TimerCtrl => "TMRCTL",
+            SFR::TimerInit => "TMRINIT",
+            SFR::BitCycle => "BITCYC",
+            SFR::PortDir => "PDIR",
+            SFR::PortIO => "PIO",
+            SFR::BitConfig => "BITCFG",
+            SFR::SysConf => "SYSCFG",
+            SFR::CtrlRead => "CTLRD",
+            SFR::CtrlWrite => "CTLWR",
+            SFR::DataExch => "DEXCH",
+            SFR::Data0 => "D0",
+            SFR::Data1 => "D1",
+            SFR::Data2 => "D2",
+            SFR::Data3 => "D3",
+            SFR::Data4 => "D4",
+            SFR::Data5 => "D5",
+            SFR::Data6 => "D6",
+            SFR::Data7 => "D7",
+            SFR::Data8 => "D8",
+            SFR::Data9 => "D9",
+            SFR::Data10 => "D10",
+            SFR::Data11 => "D11",
+            SFR::Data12 => "D12",
+            SFR::Data13 => "D13",
+            SFR::Data14 => "D14",
+            SFR::Data15 => "D15",
+            SFR::Data16 => "D16",
+            SFR::Data17 => "D17",
+            SFR::Data18 => "D18",
+            SFR::Data19 => "D19",
+            SFR::Data20 => "D20",
+            SFR::Data21 => "D21",
+            SFR::Data22 => "D22",
+            SFR::Data23 => "D23",
+            SFR::Data24 => "D24",
+            SFR::Data25 => "D25",
+            SFR::Data26 => "D26",
+            SFR::Data27 => "D27",
+            SFR::Data28 => "D28",
+            SFR::Data29 => "D29",
+            SFR::Data30 => "D30",
+            SFR::Data31 => "D31",
+            SFR::Error => "ERR",
+        }
+    }
+
+    // ... (保留之前的 to_name 函数)
+
+    pub fn parse(s: &str) -> Option<SFR> {
+        match s.to_uppercase().as_str() {
+            "PC" => Some(SFR::ProgramCounter),
+            "SR" => Some(SFR::Status),
+            "IP1" => Some(SFR::IndirPort1),
+            "IP2" => Some(SFR::IndirPort2),
+            "IA1" => Some(SFR::IndirAddr1),
+            "IA2" => Some(SFR::IndirAddr2),
+            "TMRCNT" => Some(SFR::TimerCount),
+            "TMRCTL" => Some(SFR::TimerCtrl),
+            "TMRINIT" => Some(SFR::TimerInit),
+            "BITCYC" => Some(SFR::BitCycle),
+            "PDIR" => Some(SFR::PortDir),
+            "PIO" => Some(SFR::PortIO),
+            "BITCFG" => Some(SFR::BitConfig),
+            "SYSCFG" => Some(SFR::SysConf),
+            "CTLRD" => Some(SFR::CtrlRead),
+            "CTLWR" => Some(SFR::CtrlWrite),
+            "DEXCH" => Some(SFR::DataExch),
+            s if s.starts_with('D') => {
+                if let Ok(num) = s[1..].parse::<u8>() {
+                    match num {
+                        0..=31 => Some(unsafe { std::mem::transmute(0x20 + num) }),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            "ERR" => Some(SFR::Error),
+            _ => None,
         }
     }
 

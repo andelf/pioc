@@ -8,17 +8,19 @@ Note that the original assembly language definition replies heavily on `#define`
 
 ### SFRs
 
+Using `$` prefix to denote SFRs.
+
 ```text
-INDP1 ; SFR_INDIR_PORT - Indirect Port 1
-INDP2 ; SFR_INDIR_PORT2 - Indirect Port 2
+IP1 ; SFR_INDIR_PORT - Indirect Port 1
+IP2 ; SFR_INDIR_PORT2 - Indirect Port 2
 PC ; SFR_PRG_COUNT - Program Counter
 SR ; SFR_STATUS_REG - Status Register
-INDAD1 ; SFR_INDIR_ADDR - Indirect Address 1
-TMR0 ; SFR_TMR0_COUNT - Timer 0 Counter
+IA1 ; SFR_INDIR_ADDR - Indirect Address 1
+TMRCNT ; SFR_TMR0_COUNT - Timer 0 Counter
 TMRCTL ; SFR_TIMER_CTRL - Timer Control
-TMR0IN ; SFR_TMR0_INIT - Timer 0 Initial Value
+TMRINIT ; SFR_TMR0_INIT - Timer 0 Initial Value
 BITCYC ; SFR_BIT_CYCLE - Bit Cycle
-INDAD2 ; SFR_INDIR_ADDR2 - Indirect Address 2
+IA2 ; SFR_INDIR_ADDR2 - Indirect Address 2
 PDIR ; SFR_PORT_DIR - Port Direction
 PIO ; SFR_PORT_IO - Port I/O
 BITCFG ; SFR_BIT_CONFIG - Bit Configuration
