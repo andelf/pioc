@@ -3,7 +3,7 @@
 use core::fmt;
 
 use regs::SFR;
-
+pub mod ast;
 pub mod regs;
 
 macro_rules! define_bit_type {
