@@ -1,0 +1,5 @@
+INCLUDE constants.inc
+ORG 0
+DW 0
+MOVL VALUE
+END

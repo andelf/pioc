@@ -1,6 +1,18 @@
 [package]
 name = "pioc"
-version = "0.1.0"
-edition = "2021"
+description = "PIOC assembler, disassembler, and virtual-machine runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
+clap.workspace = true
+pioc-core.workspace = true
+pioc-parser.workspace = true
+pioc-vm.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
