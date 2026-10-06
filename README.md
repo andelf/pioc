@@ -1,143 +1,125 @@
 # pioc
 
-The PIOC(Programmable Protocol I/O Microcontroller) of CH32X035/4/3 and CH643.
+Rust tooling for the WCH CH32X035/CH643 Programmable Protocol I/O Controller
+(PIOC/eMCU): an assembler, lossless disassembler, proc macros, cycle-aware VM,
+and WaveDrom/VCD waveform exporters.
 
-## The PIOC Assembly Language
+The implementation is based on the WCH PIOC manual, the vendor assembler and
+the five official EVT examples. The legacy assembler currently reproduces all
+five vendor `.BIN` files byte for byte. Canonical disassembly also round-trips
+those binaries without loss.
 
-Note that the original assembly language definition replies heavily on `#define`/`equ` directives.
+## Workspace
 
-### SFRs
+| Crate | Purpose |
+|---|---|
+| `pioc-core` | `no_std` instruction, register, encoder and target-aware decoder model |
+| `pioc-parser` | WCH legacy and normalized canonical assembly syntax |
+| `pioc-proc` | `pioc_asm!`, `pioc_asm_canonical!` and `pioc_file!` compile-time assembly |
+| `pioc-vm` | CPU, SFR, host handshake, GPIO, Timer0, scenarios and waveforms |
+| `pioc-programs` | `no_std` Embassy-style WS2812/DS18x20 protocol APIs over hardware or VM backends |
+| `pioc` | command-line assembler, disassembler and VM runner |
 
-Using `$` prefix to denote SFRs.
+## CLI
 
-```text
-IP1 ; SFR_INDIR_PORT - Indirect Port 1
-IP2 ; SFR_INDIR_PORT2 - Indirect Port 2
-PC ; SFR_PRG_COUNT - Program Counter
-SR ; SFR_STATUS_REG - Status Register
-IA1 ; SFR_INDIR_ADDR - Indirect Address 1
-TMRCNT ; SFR_TMR0_COUNT - Timer 0 Counter
-TMRCTL ; SFR_TIMER_CTRL - Timer Control
-TMRINIT ; SFR_TMR0_INIT - Timer 0 Initial Value
-BITCYC ; SFR_BIT_CYCLE - Bit Cycle
-IA2 ; SFR_INDIR_ADDR2 - Indirect Address 2
-PDIR ; SFR_PORT_DIR - Port Direction
-PIO ; SFR_PORT_IO - Port I/O
-BITCFG ; SFR_BIT_CONFIG - Bit Configuration
-SYSCFG ; SFR_SYS_CFG - System Configuration
-CTLRD ; SFR_CTRL_RD - Control Read
-CTLWR ; SFR_CTRL_WR - Control Write
-DEXCH ; SFR_DATA_EXCH - Data Exchange
+```console
+# WCH-compatible source to little-endian BIN
+cargo run -p pioc -- assemble program.ASM -o program.bin
+
+# Vendor /F-style complete 4096-byte image
+cargo run -p pioc -- assemble --full program.ASM -o program-full.bin
+
+# Normalized source
+cargo run -p pioc -- assemble --canonical program.pio -o program.bin
+
+# Lossless normalized listing
+cargo run -p pioc -- disassemble --canonical program.bin
+
+# Reassemblable source rather than an annotated address listing
+cargo run -p pioc -- disassemble --canonical --source program.bin -o program.pio
+
+# VM trace plus waveform files
+cargo run -p pioc -- run program.bin \
+  --scenario scenario.json \
+  --pin0 z --pin1 high \
+  --trace trace.jsonl \
+  --wavejson waveform.json \
+  --vcd waveform.vcd
 ```
 
-SR
+A scenario is a cycle-ordered JSON array. Addresses and values are decimal JSON
+numbers; for example, write data register 0 and then send command `1`:
 
-```text
-SR.TR ; SB_EN_TOUT_RST - Timeout Reset Enable
-SR.SU ; SB_STACK_USED - Stack Used
-SR.GY ; SB_GP_BIT_Y - General Purpose Bit Y
-SR.Z ; SB_FLAG_Z - Zero Flag
-SR.GX ; SB_GP_BIT_X - General Purpose Bit X
-SR.C ; SB_FLAG_C - Carry Flag
+```json
+[
+  {"cycle": 10, "type": "host_write", "address": 32, "value": 165},
+  {"cycle": 10, "type": "host_write", "address": 30, "value": 1},
+  {"cycle": 200, "type": "pin", "pin": 0, "value": false},
+  {"cycle": 300, "type": "pin", "pin": 0, "value": true},
+  {"cycle": 400, "type": "pin", "pin": 0, "value": null}
+]
 ```
 
-TMRCTL
+Pin `null` releases the external driver; internal pull-ups and PIOC output
+direction then determine the resolved level. Conflicting push-pull drives are
+reported as unknown rather than silently choosing one side.
 
-```text
-TMRCTL.L1E ; SB_EN_LEVEL1 - Enable Level 1
-TMRCTL.L0E ; SB_EN_LEVEL0 - Enable Level 0
-TMRCTL.T0E ; SB_TMR0_ENABLE - Timer 0 Enable
-TMRCTL.T0OE ; SB_TMR0_OUT_EN - Timer 0 Output Enable
-TMRCTL.T0M ; SB_TMR0_MODE - Timer 0 Mode
-TMRCTL.T0F2 ; SB_TMR0_FREQ2 - Timer 0 Frequency Bit 2
-TMRCTL.T0F1 ; SB_TMR0_FREQ1 - Timer 0 Frequency Bit 1
-TMRCTL.T0F0 ; SB_TMR0_FREQ0 - Timer 0 Frequency Bit 0
+For a fixed cycle-0 input, `run` also accepts `--pin0` and `--pin1`. Each value
+is `low`/`0`, `high`/`1`, or `z`/`release`. A cycle-0 scenario event is applied
+after these initial values and can therefore override them. Use scenario pin
+events for later input transitions.
+
+The WaveJSON output can be pasted into WaveDrom. VCD can be opened by GTKWave
+or another waveform viewer. `--wave-start`, `--wave-end` and `--wave-quantum`
+select the displayed cycle window and sampling density. `--clock-hz` defaults
+to the standard 48 MHz PIOC clock and controls both WaveDrom duration marks and
+VCD timestamps. WaveDrom marks show each interval as `cycles / physical time`;
+its footer records the physical duration represented by one displayed slot.
+
+## Syntax and ISA
+
+The parser accepts the vendor `INCLUDE`, `EQU`, `ORG`, `DW`, `DB` and `END`
+directives and aliases used by the EVT sources. Canonical syntax uses semantic
+register names such as `timer0.ctrl`, `pins.dir`, `cmd.in` and `d0`, instead of
+exposing C-header identifiers as the primary machine vocabulary.
+
+See [docs/isa.md](docs/isa.md) for the complete instruction map and canonical
+syntax, and [docs/registers.md](docs/registers.md) for every SFR and bitfield.
+The detailed high-level driver design and Embassy comparison are in
+[docs/programs-api-design.md](docs/programs-api-design.md).
+
+## VM scope
+
+Implemented today: deterministic CPU instructions, six-entry stack, flags,
+indirect registers, host command handshake, GPIO edge waits, digital `0/1/Z/X`
+resolution with pull-ups, Timer0 divider/reload/PWM output, PWM/Manchester codec
+TX and normal-waveform RX, WAIT timeout reset, scheduled host/pin events, trace
+JSONL, WaveJSON and VCD.
+
+Architectural boundary: the PIOC manual says program-space `WRCODE` is not
+supported, and its generic `EXEC` opcode range is redefined as `BCTC` on the
+CH32X035 target. Unknown raw words therefore stop rather than inventing an
+operation. Exact codec receive phase, analog rise/fall behavior, and same-cycle
+hardware priority remain calibration points. They are reported as limits rather
+than silently presented as verified silicon behavior.
+
+`Machine::new` starts in a standalone run/claim-both configuration; later
+`sys.ctrl` host writes enforce pin ownership, reset hold, and clock gating.
+
+## Verification
+
+```console
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-BITCYC
+The integration tests locate the sibling WCH EVT tree when available and check
+all official ASM/BIN pairs as golden files.
 
-```text
-BITCYC.TXO ; SB_BIT_TX_O0 - Bit Transmit Output 0
-BITCYC.C6 ; SB_BIT_CYCLE_6 - Bit Cycle 6
-BITCYC.C5 ; SB_BIT_CYCLE_5 - Bit Cycle 5
-BITCYC.C4 ; SB_BIT_CYCLE_4 - Bit Cycle 4
-BITCYC.C3 ; SB_BIT_CYCLE_3 - Bit Cycle 3
-BITCYC.C2 ; SB_BIT_CYCLE_2 - Bit Cycle 2
-BITCYC.C1 ; SB_BIT_CYCLE_1 - Bit Cycle 1
-BITCYC.C0 ; SB_BIT_CYCLE_0 - Bit Cycle 0
-```
+## Sources
 
-PDIR
+- [WCH support thread containing the manual, assembler and examples](https://www.wch.cn/bbs/thread-111140-1.html)
+- [Original `andelf/pioc` repository](https://github.com/andelf/pioc)
 
-```text
-PDIR.M3 ; SB_PORT_MOD3 - Port Mode 3
-PDIR.M2 ; SB_PORT_MOD2 - Port Mode 2
-PDIR.M1 ; SB_PORT_MOD1 - Port Mode 1
-PDIR.M0 ; SB_PORT_MOD0 - Port Mode 0
-PDIR.PU1 ; SB_PORT_PU1 - Port Pull-Up 1
-PDIR.PU0 ; SB_PORT_PU0 - Port Pull-Up 0
-PDIR.D1 ; SB_PORT_DIR1 - Port Direction 1
-PDIR.D0 ; SB_PORT_DIR0 - Port Direction 0
-```
-
-PIO
-
-```text
-PIO.INXOR ; SB_PORT_IN_XOR - Port Input XOR
-PIO.RXI ; SB_BIT_RX_I0 - Bit Receive Input 0
-PIO.IN1 ; SB_PORT_IN1 - Port Input 1
-PIO.IN0 ; SB_PORT_IN0 - Port Input 0
-PIO.XOR1 ; SB_PORT_XOR1 - Port XOR 1
-PIO.XOR0 ; SB_PORT_XOR0 - Port XOR 0
-PIO.OUT1 ; SB_PORT_OUT1 - Port Output 1
-PIO.OUT0 ; SB_PORT_OUT0 - Port Output 0
-```
-
-BITCFG
-
-```text
-BITCFG.TXE ; SB_BIT_TX_EN - Bit Transmit Enable
-BITCFG.CMOD ; SB_BIT_CODE_MOD - Bit Code Mode
-BITCFG.EDGE ; SB_PORT_IN_EDGE - Port Input Edge
-BITCFG.TAIL ; SB_BIT_CYC_TAIL - Bit Cycle Tail
-BITCFG.CC6 ; SB_BIT_CYC_CNT6 - Bit Cycle Count 6
-BITCFG.CC5 ; SB_BIT_CYC_CNT5 - Bit Cycle Count 5
-BITCFG.CC4 ; SB_BIT_CYC_CNT4 - Bit Cycle Count 4
-BITCFG.CC3 ; SB_BIT_CYC_CNT3 - Bit Cycle Count 3
-```
-
-SYSCFG
-
-```text
-SYSCFG.INTQ ; SB_INT_REQ - Interrupt Request
-SYSCFG.DSMR ; SB_DATA_SW_MR - Data Switch Master to RAM
-SYSCFG.DMSR ; SB_DATA_MW_SR - Data Master to Switch RAM
-SYSCFG.MCB4 ; SB_MST_CFG_B4 - Master Config Bit 4
-SYSCFG.MIO1 ; SB_MST_IO_EN1 - Master I/O Enable 1
-SYSCFG.MIO0 ; SB_MST_IO_EN0 - Master I/O Enable 0
-SYSCFG.MRST ; SB_MST_RESET - Master Reset
-SYSCFG.MCLKG ; SB_MST_CLK_GATE - Master Clock Gate
-```
-
-## Project Status
-
-- [x] OpCodes and AST
-- [ ] Assemler
-- [x] Disassembler
-- [x] Pretty Printer for Program
-- [ ] proc-macro for inline PIOC program
-
-## Documentation
-
-[Official Support BBS: Link to PIOC.zip, The docs, assembler, and examples](https://www.wch.cn/bbs/thread-111140-1.html)
-
-## Specification
-
-- `RISC8B` instruction set, embedded [CH537]?
-- Official Assembler: MCU CH53X ASSEMBLER
-- 2K code ROM*(4KB in SRAM), 49 SFR, PWM timer/counter
-- 2 I/O ports
-- single cycle instruction(almost)
-- max 48MHz clock
-
-[CH537]: https://www.wch-ic.com/products/CH537.html
+This project is an independent implementation; WCH product and instruction
+names remain the property of their respective owner.

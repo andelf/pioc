@@ -1,0 +1,4 @@
+[
+  {"cycle": 10, "type": "host_write", "address": 32, "value": 165},
+  {"cycle": 10, "type": "host_write", "address": 30, "value": 1}
+]
