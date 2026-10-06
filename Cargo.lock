@@ -162,6 +162,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pioc-programs"
+version = "0.1.0"
+dependencies = [
+ "pioc-parser",
+ "pioc-vm",
+]
+
+[[package]]
 name = "pioc-vm"
 version = "0.1.0"
 dependencies = [
