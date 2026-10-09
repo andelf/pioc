@@ -20,7 +20,7 @@ impl Default for WaveOptions {
         Self {
             start_cycle: 0,
             end_cycle: 256,
-            quantum_cycles: 1,
+            quantum_cycles: 2,
             clock_hz: 48_000_000,
         }
     }
