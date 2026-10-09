@@ -1,0 +1,239 @@
+.program pioc_nec
+
+
+
+
+    .origin 0x0000
+    .word 0x0000
+    jmp mcu_start
+    .word 0x0fff
+
+
+    .alias rec_flag = d0    ; receive flag  bit[0]@IO select. bit[1]@receive data judge.
+    .alias delay_cnt = d1    ; delay count
+    .alias bit_num = d2    ; bit nums
+    .alias var = d3    ; byte nums
+    .alias data_buf = d4    ; data buff
+    .alias data = d11    ; receive data
+
+
+clk_10:
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    ret
+; DELAY 50US
+nec_delay_50us:
+    mov a,#50
+    jmp delay_us
+; DELAY 10US
+nec_delay_10us:
+    mov a,#10
+    jmp delay_us
+; DELAY US
+delay_us:
+    call clk_10    ; 10 CLOCK @48M
+    nop
+    call clk_10    ; 10 CLOCK @48M
+    nop
+    call clk_10    ; 10 CLOCK @48M
+    nop
+    call clk_10    ; 10 CLOCK @48M
+    nop
+    add a,#0xff
+    nop
+    jmp nz,delay_us
+    ret
+
+
+nec_receive:
+    wait host_to_core_pending
+    mov a,cmd.in
+    skip clear,rec_flag[0]    ; SEL REC_PIN
+    jmp piolot_code_1
+    jmp piolot_code
+; return repreat code
+return_repeat:
+    mov a,#0x40    ; REPEAT CODE
+return:
+    mov cmd.out,a    ; RETURN ERR DELAYCNT RESULT
+    bset sys.irq_request    ; REQUEST INTERRUPT
+    skip clear,rec_flag[0]
+    jmp piolot_code_1
+    nop
+; start code. PC18 or PC7
+piolot_code:
+    bset pins.out0    ; IO_0 HIGH
+    bclr pins.dir0    ; IO_0 INPUT
+    wait io0_unchanged    ; WAIT IDLE IF HIGH
+    clr delay_cnt
+    mov a,#0x04
+    mov var,a
+    mov a,#0x08
+    mov bit_num,a
+    mov ptr0,#data
+    wait io0_changed    ; WAIT FALL
+piol_low_keep:
+    call nec_delay_50us
+    inc delay_cnt
+    skip clear,pins.changed0
+    jmp piol_low_keep
+    mov a,delay_cnt
+    flags.sub #174,a
+    jmp nc,return    ; 174(8.7mS)-A >=0
+    flags.sub #188,a
+    jmp c,return    ; 188(9.4mS)-A < 0
+    clr delay_cnt
+    wait io0_unchanged
+piol_high_keep:
+    call nec_delay_50us
+    inc delay_cnt
+    skip set,pins.changed0
+    jmp piol_high_keep
+    mov a,delay_cnt
+    flags.sub #38,a
+    jmp nc,return    ; 38(1.9mS)-A >=0
+    flags.sub #52,a
+    jmp nc,return_repeat    ; 52(2.6mS)-A >=0
+    flags.sub #82,a
+    jmp nc,return    ; 84(4.1mS)-A >=0
+    flags.sub #96,a
+    jmp c,return    ; 96(4.8mS)-A < 0
+    jmp data_code
+; data code
+data_code:
+    wait io0_changed
+    clr delay_cnt
+    bclr rec_flag[1]
+    wait io0_unchanged    ; WAIT RISE
+data_high_keep:
+    call nec_delay_10us
+    inc delay_cnt
+    skip set,pins.changed0
+    jmp data_high_keep
+    mov a,delay_cnt
+    flags.sub #30,a
+    jmp nc,return    ; 30(300uS)-A >=0
+    flags.sub #80,a
+    jmp nc,rec_0    ; 80(800uS)-A >= 0  receive data 0. bit<0> 0--data 0  1--data 1
+    flags.sub #130,a
+    jmp nc,return    ; 130(1300uS)-A >=0
+    flags.sub #190,a
+    jmp c,return    ; 190(1900uS)-A < 0
+    bset rec_flag[1]    ; receive data 1.
+rec_0:
+    rolc data_buf
+    skip clear,rec_flag[1]
+    inc data_buf
+    dec bit_num
+    skip set,status.zero
+    jmp data_code
+    mov a,#0x08
+    mov bit_num,a
+    mov a,data_buf
+    clr data_buf
+    mov [ptr0],a
+    dec ptr0
+    dec var
+    skip set,status.zero
+    jmp data_code
+    mov a,#0x80    ; Received a frame of data
+    jmp return
+    nop
+; start code. PC19
+piolot_code_1:
+    bclr pins.out1    ; IO_1 LOW
+    bclr pins.dir1    ; IO_1 INPUT
+    wait io1_changed    ; WAIT IDLE IF HIGH
+    clr delay_cnt
+    mov a,#0x04
+    mov var,a
+    mov a,#0x08
+    mov bit_num,a
+    mov ptr0,#data
+    bset pins.out1    ; IO_1 HIGH
+    wait io1_changed    ; WAIT FALL
+piol_low_keep_1:
+    call nec_delay_50us
+    inc delay_cnt
+    skip clear,pins.changed1
+    jmp piol_low_keep_1
+    mov a,delay_cnt
+    flags.sub #174,a    ; 174(8.7mS)-A >=0
+    jmp nc,return
+    flags.sub #188,a    ; 188(9.4mS)-A < 0
+    jmp c,return
+    clr delay_cnt
+    bclr pins.out1    ; IO_1 LOW
+    wait io1_changed
+piol_high_keep_1:
+    call nec_delay_50us
+    inc delay_cnt
+    skip clear,pins.changed1
+    jmp piol_high_keep_1
+    mov a,delay_cnt
+    flags.sub #38,a
+    jmp nc,return    ; 38(1.9mS)-A >=0
+    flags.sub #52,a
+    jmp nc,return_repeat    ; 52(2.6mS)-A >=0
+    flags.sub #82,a
+    jmp nc,return    ; 84(4.1mS)-A >=0
+    flags.sub #96,a
+    jmp c,return    ; 96(4.8mS)-A < 0
+    jmp data_code_1
+; data code
+data_code_1:
+    bset pins.out1    ; IO_1 HIGH
+    wait io1_changed
+    clr delay_cnt
+    bclr rec_flag[1]
+    bclr pins.out1    ; IO_1 LOW
+    wait io1_changed    ; WAIT RISE
+data_high_keep_1:
+    call nec_delay_10us
+    inc delay_cnt
+    skip clear,pins.changed1
+    jmp data_high_keep_1
+    mov a,delay_cnt
+    flags.sub #30,a
+    jmp nc,return    ; 30(300uS)-A >=0
+    flags.sub #80,a
+    jmp nc,rec_0_1    ; 80(800uS)-A >= 0  receive data 0. bit<0> 0--data 0  1--data 1
+    flags.sub #130,a
+    jmp nc,return    ; 130(1300uS)-A >=0
+    flags.sub #190,a
+    jmp c,return    ; 190(1900uS)-A < 0
+    bset rec_flag[1]    ; receive data 1.
+rec_0_1:
+    rolc data_buf
+    skip clear,rec_flag[1]
+    inc data_buf
+    dec bit_num
+    skip set,status.zero
+    jmp data_code_1
+    mov a,#0x08
+    mov bit_num,a
+    mov a,data_buf
+    clr data_buf
+    mov [ptr0],a
+    dec ptr0
+    dec var
+    skip set,status.zero
+    jmp data_code_1
+    mov a,#0x80    ; Received a frame of data
+    jmp return
+    nop
+
+
+mcu_start:
+    nop
+    nop
+    jmp nec_receive
+    jmp mcu_start
+
+    .end
+
+

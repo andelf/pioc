@@ -32,6 +32,9 @@ cargo run -p pioc -- assemble --full program.ASM -o program-full.bin
 # Normalized source
 cargo run -p pioc -- assemble --canonical program.pio -o program.bin
 
+# Convert WCH/EVT source while retaining labels and comments
+cargo run -p pioc -- translate program.ASM -o program.pio
+
 # Lossless normalized listing
 cargo run -p pioc -- disassemble --canonical program.bin
 
@@ -71,7 +74,8 @@ events for later input transitions.
 
 The WaveJSON output can be pasted into WaveDrom. VCD can be opened by GTKWave
 or another waveform viewer. `--wave-start`, `--wave-end` and `--wave-quantum`
-select the displayed cycle window and sampling density. `--clock-hz` defaults
+select the displayed cycle window and sampling density; the default is two
+PIOC cycles per WaveDrom slot. `--clock-hz` defaults
 to the standard 48 MHz PIOC clock and controls both WaveDrom duration marks and
 VCD timestamps. WaveDrom marks show each interval as `cycles / physical time`;
 its footer records the physical duration represented by one displayed slot.
@@ -79,9 +83,15 @@ its footer records the physical duration represented by one displayed slot.
 ## Syntax and ISA
 
 The parser accepts the vendor `INCLUDE`, `EQU`, `ORG`, `DW`, `DB` and `END`
-directives and aliases used by the EVT sources. Canonical syntax uses semantic
-register names such as `timer0.ctrl`, `pins.dir`, `cmd.in` and `d0`, instead of
-exposing C-header identifiers as the primary machine vocabulary.
+directives and aliases used by the EVT sources. Canonical syntax deliberately
+has a small core: familiar operations such as `mov`, `add`, `jmp`, `bset` and
+`skip`, plus semantic register names such as `timer0.ctrl`, `pins.dir`, `cmd.in`,
+`ptr0` and `d0`. `.alias` and `.const` are optional conveniences; rare forms
+such as `mov.lit` are lossless-encoding escapes, not concepts required for
+normal programs.
+
+The five translated EVT programs under [`examples/canonical`](examples/canonical)
+are assembled in tests and must reproduce the vendor BIN files byte for byte.
 
 See [docs/isa.md](docs/isa.md) for the complete instruction map and canonical
 syntax, and [docs/registers.md](docs/registers.md) for every SFR and bitfield.

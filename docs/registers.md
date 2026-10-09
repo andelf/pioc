@@ -10,16 +10,16 @@ registers and is called out explicitly. Reset `X` means unspecified/retained.
 
 | Addr | Canonical | Vendor name | Reset | Core role |
 |---:|---|---|---:|---|
-| `00` | `idata0` | `SFR_INDIR_PORT` | `XX` | data at address `p0` |
-| `01` | `idata1` | `SFR_INDIR_PORT2` | `XX` | data at `p1`; `MOV`/`MOVA` post-increment `p1` |
+| `00` | `[ptr0]` | `SFR_INDIR_PORT` | `XX` | data at address `ptr0` |
+| `01` | `[ptr1]` | `SFR_INDIR_PORT2` | `XX` | data at `ptr1`; byte `MOV`/`MOVA` are written `[ptr1+]` |
 | `02` | `pcl` | `SFR_PRG_COUNT` | `00` | low 8 PC bits; write changes control flow |
 | `03` | `status` | `SFR_STATUS_REG` | mixed | ALU flags, stack/timeout and GP bits |
-| `04` | `p0` | `SFR_INDIR_ADDR` | `XX` | indirect address 0 low byte |
+| `04` | `ptr0` | `SFR_INDIR_ADDR` | `XX` | indirect address 0 low byte |
 | `05` | `timer0.count` | `SFR_TMR0_COUNT` | `00` | Timer0 current count |
 | `06` | `timer0.ctrl` | `SFR_TIMER_CTRL` | `00` | Timer0 and pin-level controls |
 | `07` | `timer0.reload` | `SFR_TMR0_INIT` | `00` | reload value / PWM threshold |
 | `08` | `codec.period` | `SFR_BIT_CYCLE` | `00` | codec TX bit and period |
-| `09` | `p1` | `SFR_INDIR_ADDR2` | `00` | indirect address 1 low byte |
+| `09` | `ptr1` | `SFR_INDIR_ADDR2` | `00` | indirect address 1 low byte |
 | `0A` | `pins.dir` | `SFR_PORT_DIR` | `00` | pin mode, pull and direction |
 | `0B` | `pins` | `SFR_PORT_IO` | `XX` | resolved input/XOR and output latch |
 | `0C` | `codec.ctrl` | `SFR_BIT_CONFIG` | `10` | codec configuration and state |
@@ -75,7 +75,7 @@ while the PDF access summary appears to put those swapped views on address 05.
 | 6:0 | `codec.period` | bit-cycle count (vendor descriptions differ by one) |
 
 Writing this register clears IO0 edge records. A zero period stops the codec and
-sets `codec.ctrl.tail`; the manual says very small values with the high five
+sets `codec.done`; the manual says very small values with the high five
 period bits clear disable encoding. Exact off-by-one timing remains a hardware
 calibration point; official examples use values such as 28 and 56 clocks.
 
@@ -97,13 +97,13 @@ calibration point; official examples use values such as 28 and 56 clocks.
 | Bit | Canonical role | Access | Meaning |
 |---:|---|---|---|
 | 7 | `input_xor` | R | `input1 XOR input0` |
-| 6 | `codec_rx` | R | bit decoded from IO0 |
-| 5 | `input1` | R | resolved IO1 level |
-| 4 | `input0` | R | resolved IO0 level |
-| 3 | `changed1` | R | `input1 XOR output1` |
-| 2 | `changed0` | R | `input0 XOR output0` |
-| 1 | `output1` | R/W | IO1 output latch |
-| 0 | `output0` | R/W | IO0 output latch |
+| 6 | `codec.rx_bit` | R | bit decoded from IO0 |
+| 5 | `in1` | R | resolved IO1 level |
+| 4 | `in0` | R | resolved IO0 level |
+| 3 | `changed1` | R | `in1 XOR out1` |
+| 2 | `changed0` | R | `in0 XOR out0` |
+| 1 | `out1` | R/W | IO1 output latch |
+| 0 | `out0` | R/W | IO0 output latch |
 
 Timer0 output and codec TX can override the IO0 output latch. The `BP*`/`BG*`
 instructions can transfer pin/codec endpoints without a general register move.
@@ -117,7 +117,7 @@ The VM resolves PIOC drive, external drive and internal pull-up into a physical
 | 7 | `tx_enable` | W | 0=receive/decode; 1=encode/transmit on IO0 |
 | 6 | `manchester` | W | 0=25/75% PWM; 1=Manchester-style coding |
 | 5 | `edge_sample` | W | select present midpoint or previous-edge sample |
-| 4 | `tail` | R | final quarter of bit cycle / codec completion |
+| 4 | `done` | R | final quarter of bit cycle / codec completion |
 | 3 | `count6` | R | internal cycle counter bit 6 |
 | 2 | `count5` | R | internal cycle counter bit 5 |
 | 1 | `count4` | R | internal cycle counter bit 4 |
@@ -131,7 +131,7 @@ those exact boundaries remain subject to logic-analyzer calibration.
 
 | Bit | Canonical role | Controller | Meaning |
 |---:|---|---|---|
-| 7 | `interrupt_request` | PIOC | request host interrupt |
+| 7 | `irq_request` | PIOC | request host interrupt |
 | 6 | `core_to_host_pending` | handshake | set by PIOC `cmd.out` write; host read clears |
 | 5 | `host_to_core_pending` | handshake | set by host `cmd.in` write; PIOC read clears |
 | 4 | `host_config` | host | application-defined configuration |
@@ -152,7 +152,7 @@ header and examples identify it as IO0.
 - `xchg` is ordinary shared data with special single-cycle bit-transfer paths.
 - `d0..d31` have no hardware-prescribed meaning and are shared with the host.
 
-`idata1` does not post-increment for every operation. Per the PIOC manual,
-`MOV idata1,A` and `MOVA idata1` increment `p1` after accessing RAM; bit tests,
-bit set/clear and arithmetic accesses leave `p1` unchanged. `MOVA2P` is the
-separate immediate-write-and-increment instruction.
+Per the PIOC manual, byte `MOV`/`MOVA` accesses increment `ptr1` and therefore
+use `[ptr1+]`; bit tests, bit set/clear and arithmetic accesses use `[ptr1]`
+without increment. A bit operand is written `[ptr1][bit]`.
+`MOVA2P` is the separate immediate-write-and-increment instruction.

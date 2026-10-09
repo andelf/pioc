@@ -118,41 +118,60 @@ taken conditional branches/skips take two; `RDCODE` takes three in the VM.
 
 ## Canonical vocabulary
 
-Canonical output is not a cosmetic lower-case C header. It exposes data flow:
+Canonical source is intentionally a small assembly language, not a lower-case
+copy of the vendor C header. Its recommended core is:
 
 ```text
-mov d0,a
+.alias count = d0
+mov count,a
 mov a,d0
-sub a,d0,a
+mov ptr1,#buffer
+mov [ptr1+],a
 mov pins.dir,#0x01
-bset pins.output0
+bset pins.out0
 wait host_to_core_pending
 jmp nz,label
 ```
 
+The common families are `mov`, ALU verbs, `bset`/`bclr`, `skip`,
+`jmp`/`call`/`ret`, and `wait`. `.alias name = register` and
+`.const name = expression` are optional; programs may use `d0` and numeric
+literals directly.
+
+Only lossless tools need encoding escapes. For example, `mov a,#0` selects the
+short `CLRA` encoding, while `mov.lit a,#0` requests the distinct `MOVL 0`
+word. Such forms are emitted only when two encodings would otherwise have the
+same source spelling.
+
 Disassembly emits numeric targets because machine code contains no labels.
 `.word 0xNNNN` preserves unknown words. The assembler accepts `.origin`/`ORG`,
-`.word`/`DW`, labels, constants and the vendor legacy directives.
+`.word`/`DW`, labels and constants. `pioc translate old.ASM -o new.pio`
+expands includes and retains source labels and comments.
 
 Documented SFR fields use dotted operands such as `status.zero`,
-`timer0.ctrl.enable`, `pins.dir.output0`, `pins.input0`,
+`timer0.ctrl.enable`, `pins.dir0`, `pins.in0`,
 `codec.ctrl.tx_enable`, and `sys.ctrl.host_to_core_pending`. Unknown or generic
 register bits retain the explicit `register[index]` form.
+
+`[ptr1+]` makes post-increment visible for byte moves. Bit operations use
+`[ptr1][bit]`, because those accesses do not increment the pointer. The old
+`p0`, `p1`, `idata0`, `idata1`, `pins.input0` and `pins.output0` spellings remain
+accepted as migration aliases, but canonical output does not emit them.
 
 ## SFR address map
 
 | Address | Canonical | Vendor name | Purpose |
 |---:|---|---|---|
-| `00` | `idata0` | `SFR_INDIR_PORT` | indirect data port 0 |
-| `01` | `idata1` | `SFR_INDIR_PORT2` | indirect data port 1; `MOV`/`MOVA` post-increment |
+| `00` | `[ptr0]` | `SFR_INDIR_PORT` | indirect data port 0 |
+| `01` | `[ptr1]` | `SFR_INDIR_PORT2` | indirect data port 1; byte `MOV`/`MOVA` are written `[ptr1+]` |
 | `02` | `pcl` | `SFR_PRG_COUNT` | program counter low byte |
 | `03` | `status` | `SFR_STATUS_REG` | flags, stack/timeout and GP bits |
-| `04` | `p0` | `SFR_INDIR_ADDR` | indirect address 0 |
+| `04` | `ptr0` | `SFR_INDIR_ADDR` | indirect address 0 |
 | `05` | `timer0.count` | `SFR_TMR0_COUNT` | Timer0 count |
 | `06` | `timer0.ctrl` | `SFR_TIMER_CTRL` | Timer0 and pin wake control |
 | `07` | `timer0.reload` | `SFR_TMR0_INIT` | reload/PWM threshold |
 | `08` | `codec.period` | `SFR_BIT_CYCLE` | codec period and TX bit |
-| `09` | `p1` | `SFR_INDIR_ADDR2` | indirect address 1 |
+| `09` | `ptr1` | `SFR_INDIR_ADDR2` | indirect address 1 |
 | `0A` | `pins.dir` | `SFR_PORT_DIR` | direction, pull and mode |
 | `0B` | `pins` | `SFR_PORT_IO` | inputs, XOR and outputs |
 | `0C` | `codec.ctrl` | `SFR_BIT_CONFIG` | codec configuration/status |

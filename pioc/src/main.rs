@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pioc_core::{DecodeTarget, PROGRAM_WORDS};
-use pioc_parser::{assemble_file_with_syntax, format_decoded, Program, Syntax};
+use pioc_parser::{
+    assemble_file_with_syntax, format_decoded, translate_legacy_file, Program, Syntax,
+};
 use pioc_vm::{run_scenario, to_vcd, to_wavejson, Machine, RunLimits, ScheduledEvent, WaveOptions};
 
 #[derive(Debug, Parser)]
@@ -46,6 +48,13 @@ enum Command {
         /// Pad the BIN to the complete 2048-word PIOC program space.
         #[arg(long)]
         full: bool,
+    },
+    /// Translate WCH legacy source into label-preserving canonical source.
+    Translate {
+        input: PathBuf,
+        /// Output source path. Defaults to the input path with a .pio extension.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Decode a little-endian PIOC binary.
     Disassemble {
@@ -97,7 +106,7 @@ enum Command {
         #[arg(long)]
         wave_end: Option<u64>,
         /// Number of PIOC cycles represented by one WaveJSON character.
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 2)]
         wave_quantum: u64,
     },
 }
@@ -122,6 +131,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let output = output.unwrap_or_else(|| input.with_extension("bin"));
             std::fs::write(output, program.to_le_bytes())?;
+        }
+        Command::Translate { input, output } => {
+            let source = translate_legacy_file(&input)?;
+            let output = output.unwrap_or_else(|| input.with_extension("pio"));
+            std::fs::write(output, source)?;
         }
         Command::Disassemble {
             input,

@@ -1,0 +1,559 @@
+.program pioc_iic
+
+
+
+
+    .origin 0x0000
+    .word 0x0000
+    jmp mcu_start
+    .word 0x0fff
+
+    .alias iic_tim_freq = d0
+    .alias iic_tim_arr = d1
+    .alias iic_addr_l = d2
+    .alias iic_addr_h = d3
+    .alias var_size_l = d4
+    .alias var_size_h = d5
+    .alias iic_flag = d6
+    .alias iic_var = d7
+    .alias iic_data = d8
+
+    .alias iic_slave_buf = d24
+
+clk_10:
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    ret
+
+delay_us:
+    call clk_10
+    nop
+    call clk_10
+    nop
+    call clk_10
+    nop
+    call clk_10
+    nop
+    add a,#0xff
+    nop
+    jmp nz,delay_us
+    ret
+
+tim_init:
+    mov a,iic_tim_arr
+    mov timer0.reload,a
+    mov a,iic_tim_freq
+    mov timer0.ctrl,a
+    ret
+
+iic_host:
+    wait host_to_core_pending
+    mov a,cmd.in
+    bset pins.out0
+    bset pins.out1
+    mov pins.dir,#0b00001111
+    bclr status.gp_x
+    bclr status.gp_y
+    skip clear,iic_flag[1]
+    bset status.gp_y
+    mov a,#0x08
+    mov iic_var,a
+    mov ptr1,#iic_data
+    call tim_init
+sr:
+    mov a,#0x05
+    call delay_us
+    bclr pins.out1
+    mov a,#0x05
+    call delay_us
+    mov a,iic_tim_arr
+    mov timer0.count,a
+    bset timer0.ctrl.enable
+    bset timer0.ctrl.output_enable
+    mov a,iic_addr_h
+    mov xchg,a
+    wait io0_changed
+    mov pins.out1,xchg[7]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[6]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[5]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[4]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[3]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[2]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[1]
+    wait io0_unchanged
+    wait io0_changed
+    skip clear,status.gp_y
+    bclr xchg[0]
+    mov pins.out1,xchg[0]
+    wait io0_unchanged
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov c,pins.in1
+    jmp c,host_stop
+    skip set,status.gp_y
+    jmp host_r_w
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    mov a,iic_addr_l
+    mov xchg,a
+    mov pins.out1,xchg[7]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[6]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[5]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[4]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[3]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[2]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[1]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[0]
+    wait io0_unchanged
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov c,pins.in1
+    jmp c,host_stop
+    skip set,iic_addr_h[0]
+    jmp host_write_byte
+    wait io0_changed
+    bset pins.out1
+    bset pins.dir1
+    bclr pins.out0
+    bclr timer0.ctrl.enable
+    bclr timer0.ctrl.output_enable
+    mov a,#0x01
+    call delay_us
+    bset timer0.ctrl.enable
+    bset timer0.ctrl.output_enable
+    bset pins.out0
+    wait io0_unchanged
+    bclr timer0.ctrl.enable
+    bclr timer0.ctrl.output_enable
+    bclr status.gp_y
+    jmp sr
+
+host_r_w:
+    skip set,xchg[0]
+    jmp host_write_byte
+    wait io0_changed
+    bclr pins.out0
+    bclr timer0.ctrl.enable
+    bclr timer0.ctrl.output_enable
+    mov a,#0x0b
+    call delay_us
+    bset timer0.ctrl.enable
+    bset timer0.ctrl.output_enable
+    bset pins.out0
+host_read_byte:
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov xchg[7],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[6],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[5],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[4],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[3],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[2],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[1],pins.in1
+    wait io0_changed
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h
+    wait io0_unchanged
+    mov xchg[0],pins.in1
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,host_read_stop
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    mov a,xchg
+    mov [ptr1+],a
+    wait io0_unchanged
+    dec iic_var
+    jmp nz,host_read_byte
+    skip clear,status.gp_x
+    mov ptr1,#iic_data
+    mov a,#0x02
+    xor status,a
+    mov a,#0x08
+    mov iic_var,a
+    bset sys.irq_request
+    jmp host_read_byte
+host_read_stop:
+    wait io0_changed
+    bset pins.out1
+    bset pins.dir1
+    mov a,xchg
+    mov [ptr1+],a
+    wait io0_unchanged
+    bset sys.irq_request
+    jmp host_stop
+host_write_byte:
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    mov a,[ptr1+]
+    mov xchg,a
+    mov pins.out1,xchg[7]
+    wait io0_unchanged
+    wait io0_changed
+    call clk_10
+    mov pins.out1,xchg[6]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[5]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[4]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[3]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[2]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[1]
+    wait io0_unchanged
+    dec iic_var
+    jmp nz,host_write_1
+    skip clear,status.gp_x
+    mov ptr1,#iic_data
+    mov a,#0x02
+    xor status,a
+    mov a,#0x08
+    mov iic_var,a
+    bset sys.irq_request
+host_write_1:
+    wait io0_changed
+    mov pins.out1,xchg[0]
+    wait io0_unchanged
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+; CALL  CLK_10
+    mov c,pins.in1
+    jmp c,host_stop
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,host_stop
+    jmp host_write_byte
+host_stop:
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    wait io0_unchanged
+    bclr timer0.ctrl.enable
+    bclr timer0.ctrl.output_enable
+    mov a,#0x01
+    call delay_us
+    bset pins.out1
+    jmp iic_host
+
+iic_slave:
+    bclr status.gp_x
+    bclr status.gp_y
+    mov ptr1,#iic_data
+    bset pins.out0
+    bset pins.out1
+    mov pins.dir,#0b00001100
+slave_1:
+    wait io0_unchanged
+    mov c,pins.in1
+    jmp nc,slave_1
+    wait io1_changed
+    call clk_10
+    mov c,pins.in0
+    jmp nc,slave_1
+    mov a,#0x08
+    mov iic_var,a
+    bclr iic_addr_h[0]
+slave_2:
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[7],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[6],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[5],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[4],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[3],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[2],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[1],pins.in1
+    bclr xchg[0]
+    mov a,xchg
+    xor a,iic_addr_h
+    jmp nz,iic_slave
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[0],pins.in1
+    skip clear,status.gp_y
+    jmp slave_6
+    skip set,xchg[0]
+    jmp slave_3
+
+; FA_7
+    skip clear,iic_flag[1]
+    jmp iic_slave
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    jmp slave_transmit
+slave_3:
+    skip clear,iic_flag[1]
+    jmp slave_4
+; SHOU_7
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    jmp slave_receive
+slave_4:
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    wait io0_unchanged
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov xchg[7],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[6],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[5],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[4],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[3],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[2],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[1],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[0],pins.in1
+    mov a,xchg
+    xor a,iic_addr_l
+    jmp nz,iic_slave
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    wait io0_unchanged
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov xchg[7],pins.in1
+; BS    IIC_ADDR_H,0
+    mov c,pins.in1
+    jmp nc,slave_receive_2
+slave_5:
+    skip set,pins.input_xor
+    jmp slave_5
+    mov c,pins.in0
+    jmp nc,slave_receive_4
+    bset status.gp_y
+    jmp slave_2
+slave_6:
+    skip set,xchg[0]
+    jmp iic_slave
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    jmp slave_transmit
+
+
+slave_receive:
+    bset iic_addr_h[0]
+    wait io0_unchanged
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov xchg[7],pins.in1
+    mov c,pins.in1
+    jmp c,slave_receive_3
+    call clk_10
+slave_receive_1:
+    skip clear,pins.input_xor
+    jmp slave_receive_1
+; CALL  CLK_10
+    mov c,pins.in0
+    jmp nc,slave_receive_4
+    bset iic_flag[2]
+    bset sys.irq_request
+    jmp iic_slave
+slave_receive_2:
+    bset iic_addr_h[0]
+slave_receive_3:
+    wait io0_changed
+slave_receive_4:
+    wait io0_unchanged
+    mov xchg[6],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[5],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[4],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[3],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[2],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[1],pins.in1
+    wait io0_changed
+    wait io0_unchanged
+    mov xchg[0],pins.in1
+    mov a,xchg
+    mov [ptr1+],a
+    wait io0_changed
+    bclr pins.out1
+    bset pins.dir1
+    dec iic_var
+    jmp nz,slave_receive
+    skip clear,status.gp_x
+    mov ptr1,#iic_data
+    mov a,#0x02
+    xor status,a
+    mov a,#0x08
+    mov iic_var,a
+    bset sys.irq_request
+    jmp slave_receive
+
+slave_transmit:
+    bclr iic_addr_h[0]
+    bset sys.irq_request
+    mov ptr1,#iic_slave_buf
+    bset status.gp_x
+slave_transmit_1:
+    wait io0_unchanged
+    wait io0_changed
+    clr a
+    or a,[ptr1]
+    mov xchg,a
+    clr [ptr1]
+    mov a,[ptr1+]
+    mov pins.out1,xchg[7]
+    bset pins.dir1
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[6]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[5]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[4]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[3]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[2]
+    wait io0_unchanged
+    wait io0_changed
+    mov pins.out1,xchg[1]
+    wait io0_unchanged
+    dec iic_var
+    jmp nz,slave_transmit_2
+    skip clear,status.gp_x
+    mov ptr1,#iic_data
+    mov a,#0x02
+    xor status,a
+    mov a,#0x08
+    mov iic_var,a
+    bset sys.irq_request
+slave_transmit_2:
+    wait io0_changed
+    mov pins.out1,xchg[0]
+    wait io0_unchanged
+    wait io0_changed
+    bclr pins.dir1
+    wait io0_unchanged
+    mov c,pins.in1
+    jmp nc,slave_transmit_1
+    bset iic_flag[2]
+    bset sys.irq_request
+    jmp iic_slave
+
+
+mcu_start:
+    nop
+    nop
+    wait host_to_core_pending
+    skip set,iic_flag[0]
+    jmp iic_slave
+    jmp iic_host
+    jmp mcu_start
+
+hhh:
+    jmp hhh
+
+
+    .end
+
+
