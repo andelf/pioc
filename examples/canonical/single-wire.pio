@@ -1,0 +1,304 @@
+.program pioc_single_wire
+
+
+
+
+    .origin 0x0000
+    .word 0x0000
+    jmp mcu_start
+    .word 0x0fff
+
+
+    .alias flag = d0
+    .alias var = d1
+    .alias even = d2
+    .alias addr = d3
+    .alias data = d7
+
+
+tim_init:
+    clr a
+    mov timer0.reload,a
+    mov a,#0x03
+    and a,flag
+    xor a,#0x07
+    mov timer0.ctrl,a
+    ret
+
+clk_10:
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    ret
+
+delay_us:
+    call clk_10
+    nop
+    call clk_10
+    nop
+    call clk_10
+    nop
+    call clk_10
+    nop
+    add a,#0xff
+    nop
+    jmp nz,delay_us
+    ret
+
+
+clk_6:
+    nop
+    nop
+    ret
+
+delay_7t:
+    call clk_6
+    call clk_6
+delay_5t:
+    call clk_6
+    call clk_6
+delay_3t:
+    call clk_6
+    call clk_6
+    nop
+    nop
+    ret
+
+delay_1t_4t:
+    skip clear,flag[1]
+    call delay_3t
+    ret
+
+delay_1t_8t:
+    skip clear,flag[1]
+    call delay_7t
+    ret
+
+delay:
+    skip clear,flag[0]
+    call delay_1t_8t
+    skip clear,flag[1]
+    call delay_5t
+    call clk_6
+    call clk_6
+    nop
+    nop
+    nop
+    nop
+    ret
+
+bit:
+    bclr pins.out0
+    skip clear,flag[0]
+    call delay_1t_4t
+    skip clear,flag[1]
+    call delay_3t
+    skip set,status.gp_x
+    call delay
+    nop
+    bset pins.out0
+    call clk_6
+    call clk_6
+    call clk_6
+    skip clear,status.gp_x
+    inc even
+    bclr status.gp_x
+    ret
+
+bit1:
+    clr timer0.count
+    bclr pins.out0
+    bset pins.dir0
+    bset timer0.ctrl.enable
+    skip clear,flag[0]
+    call delay_1t_4t
+    skip clear,flag[1]
+    call delay_3t
+    bclr status.gp_x
+    mov a,#0x03
+    bclr pins.dir0
+    wait io0_changed
+    bclr timer0.ctrl.enable
+    mov a,#0x0c
+    sub a,timer0.count,a
+    skip clear,status.zero
+    bset status.gp_x
+    skip clear,status.carry
+    bset status.gp_x
+    skip clear,status.gp_x
+    inc even
+    call clk_6
+    ret
+
+new_write:
+    wait host_to_core_pending
+    mov a,cmd.in
+    call tim_init
+    clr even
+    bclr status.gp_x
+    bset pins.dir0
+    mov a,#0x04
+    mov var,a
+; MOVIA DATA
+    skip clear,flag[2]
+    bset status.gp_x    ; START
+    call bit
+    skip set,flag[2]
+    jmp w_r_data
+; MOV   SFR_INDIR_PORT2,A				;ADDR
+    mov a,addr
+    mov xchg,a
+    skip clear,xchg[6]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[5]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[4]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[3]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[2]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[1]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[0]
+    bset status.gp_x
+    call bit
+    skip clear,flag[3]
+    bset status.gp_x    ; WRITE
+    call bit
+w_r_data:
+    mov ptr0,#data
+    skip set,flag[3]
+    jmp read_data
+write_data:
+    mov a,[ptr0]
+; MOV   SFR_INDIR_PORT2,A				;32_DATA
+    mov xchg,a
+    skip clear,xchg[7]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[6]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[5]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[4]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[3]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[2]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[1]
+    bset status.gp_x
+    call bit
+    skip clear,xchg[0]
+    bset status.gp_x
+    call bit
+    dec ptr0
+    dec var
+    skip set,status.zero
+    jmp write_data
+    skip clear,even[0]
+    bset status.gp_x
+    call bit
+    jmp stop
+read_data:
+    clr xchg
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[7]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[6]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[5]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[4]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[3]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[2]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[1]
+    call bit1
+    skip clear,status.gp_x
+    bset xchg[0]
+    mov a,xchg
+    mov [ptr0],a
+    dec ptr0
+; MOVA  SFR_INDIR_PORT2
+    bclr status.gp_x
+    dec var
+    skip set,status.zero
+    jmp read_data
+    call bit1
+    skip clear,even[0]
+    bset flag[4]
+stop:
+    bset pins.dir0
+    skip clear,flag[6]
+    bset sys.irq_request
+    bset flag[5]
+    mov a,#0x02    ; STOP
+    skip clear,flag[0]
+    add a,#0x01
+    skip clear,flag[1]
+    add a,#0x06
+    call delay_us
+    jmp new_write
+
+res:
+    bset pins.out0
+    bset pins.dir0
+    mov a,#0xff
+    call delay_us
+    bclr pins.out0
+    mov a,#0xff
+    call delay_us
+    mov a,#0xff
+    call delay_us
+    mov a,#0xff
+    call delay_us
+    mov a,#0xff
+    call delay_us
+    mov a,#0xff
+    call delay_us
+    mov a,#0xff
+    call delay_us
+    mov a,#0xff
+    call delay_us
+    mov a,#0xcc
+    call delay_us
+    bset pins.out0
+    mov a,#0x01
+    call delay_us
+    ret
+
+mcu_start:
+    nop
+    nop
+    call res
+    jmp new_write
+    jmp mcu_start
+
+    .end
+
+

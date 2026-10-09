@@ -70,10 +70,10 @@ fn bit_input(input: BitInput, syntax: Syntax) -> &'static str {
         (BitInput::CodecRx, Syntax::Legacy) => "BI_BIT_RX_I0",
         (BitInput::Io0, Syntax::Legacy) => "BI_PORT_IN0",
         (BitInput::Io1, Syntax::Legacy) => "BI_PORT_IN1",
-        (BitInput::CarryXorIo0, Syntax::Canonical) => "carry_xor_io0",
-        (BitInput::CodecRx, Syntax::Canonical) => "codec_rx",
-        (BitInput::Io0, Syntax::Canonical) => "io0",
-        (BitInput::Io1, Syntax::Canonical) => "io1",
+        (BitInput::CarryXorIo0, Syntax::Canonical) => "pins.in0",
+        (BitInput::CodecRx, Syntax::Canonical) => "codec.rx_bit",
+        (BitInput::Io0, Syntax::Canonical) => "pins.in0",
+        (BitInput::Io1, Syntax::Canonical) => "pins.in1",
     }
 }
 
@@ -83,10 +83,10 @@ fn bit_output(endpoint: BitIo, syntax: Syntax) -> &'static str {
         (BitIo::CodecBit, Syntax::Legacy) => "BO_BIT_TX_O0",
         (BitIo::Io0, Syntax::Legacy) => "BO_PORT_OUT0",
         (BitIo::Io1, Syntax::Legacy) => "BO_PORT_OUT1",
-        (BitIo::Carry, Syntax::Canonical) => "carry",
-        (BitIo::CodecBit, Syntax::Canonical) => "codec_bit",
-        (BitIo::Io0, Syntax::Canonical) => "io0",
-        (BitIo::Io1, Syntax::Canonical) => "io1",
+        (BitIo::Carry, Syntax::Canonical) => "status.carry",
+        (BitIo::CodecBit, Syntax::Canonical) => "codec.tx_bit",
+        (BitIo::Io0, Syntax::Canonical) => "pins.out0",
+        (BitIo::Io1, Syntax::Canonical) => "pins.out1",
     }
 }
 
@@ -96,7 +96,10 @@ fn bit_source(endpoint: BitIo, syntax: Syntax) -> &'static str {
         (BitIo::CodecBit, Syntax::Legacy) => "BI_BIT_RX_I0",
         (BitIo::Io0, Syntax::Legacy) => "BI_PORT_IN0",
         (BitIo::Io1, Syntax::Legacy) => "BI_PORT_IN1",
-        _ => bit_output(endpoint, syntax),
+        (BitIo::Carry, Syntax::Canonical) => "status.carry",
+        (BitIo::CodecBit, Syntax::Canonical) => "codec.rx_bit",
+        (BitIo::Io0, Syntax::Canonical) => "pins.in0",
+        (BitIo::Io1, Syntax::Canonical) => "pins.in1",
     }
 }
 
@@ -110,14 +113,24 @@ fn legacy_byte(name: &str, source: Register, dest: Destination) -> String {
 
 fn canonical_byte(name: &str, source: Register, dest: Destination) -> String {
     let source_name = format_register(source, Syntax::Canonical);
-    let dest_name = match dest {
-        Destination::Accumulator => "a".to_string(),
-        Destination::Register => source_name.clone(),
-    };
-    format!("{name} {dest_name},{source_name}")
+    match dest {
+        Destination::Accumulator => format!("{name} a,{source_name}"),
+        Destination::Register => format!("{name} {source_name}"),
+    }
+}
+
+fn canonical_move_register(register: Register) -> String {
+    if register.address() == 0x01 {
+        "[ptr1+]".into()
+    } else {
+        format_register(register, Syntax::Canonical)
+    }
 }
 
 fn canonical_register_bit(register: Register, bit: u8) -> String {
+    if register.address() == 0x01 {
+        return format!("[ptr1][{bit}]");
+    }
     canonical_bit_name(register, bit).map_or_else(
         || format!("{}[{bit}]", format_register(register, Syntax::Canonical)),
         str::to_string,
@@ -147,17 +160,16 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
         (Exec { operation }, Syntax::Legacy) => format!("EXEC {operation}"),
         (Exec { operation }, Syntax::Canonical) => format!("exec #{operation}"),
         (BitToCarry(input), Syntax::Legacy) => format!("BCTC {}", bit_input(input, syntax)),
-        (BitToCarry(input), Syntax::Canonical) => {
-            format!("mov c,bitin[{}]", input as u8)
-        }
+        (BitToCarry(BitInput::CarryXorIo0), Syntax::Canonical) => "xor c,pins.in0".into(),
+        (BitToCarry(input), Syntax::Canonical) => format!("mov c,{}", bit_input(input, syntax)),
         (PushAccumulatorStatus, Syntax::Legacy) => "PUSHAS".into(),
         (PushAccumulatorStatus, Syntax::Canonical) => "push {a,flags}".into(),
         (PopAccumulatorStatus, Syntax::Legacy) => "POPAS".into(),
         (PopAccumulatorStatus, Syntax::Canonical) => "pop {a,flags}".into(),
         (PushIndirect1, Syntax::Legacy) => "PUSHA2".into(),
-        (PushIndirect1, Syntax::Canonical) => "push {p1,page}".into(),
+        (PushIndirect1, Syntax::Canonical) => "push {ptr1,page}".into(),
         (PopIndirect1, Syntax::Legacy) => "POPA2".into(),
-        (PopIndirect1, Syntax::Canonical) => "pop {p1,page}".into(),
+        (PopIndirect1, Syntax::Canonical) => "pop {ptr1,page}".into(),
         (Return, _) => "ret".into(),
         (ReturnZero, Syntax::Legacy) => "RETZ".into(),
         (ReturnZero, Syntax::Canonical) => "ret z=1".into(),
@@ -172,7 +184,7 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
             format!("MOVA {}", format_register(register, syntax))
         }
         (StoreAccumulator(register), Syntax::Canonical) => {
-            format!("mov {},a", format_register(register, syntax))
+            format!("mov {},a", canonical_move_register(register))
         }
         (
             Load {
@@ -187,7 +199,14 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
                 destination,
             },
             Syntax::Canonical,
-        ) => canonical_byte("mov", source, destination),
+        ) => {
+            let source_name = canonical_move_register(source);
+            let destination_name = match destination {
+                Destination::Accumulator => "a".into(),
+                Destination::Register => source_name.clone(),
+            };
+            format!("mov {destination_name},{source_name}")
+        }
         (
             Increment {
                 source,
@@ -329,12 +348,11 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
             Syntax::Canonical,
         ) => {
             let reg = format_register(source, syntax);
-            let dst = if destination == Destination::Accumulator {
-                "a"
+            if destination == Destination::Accumulator {
+                format!("sub a,{reg},a")
             } else {
-                &reg
-            };
-            format!("sub {dst},{reg},a")
+                format!("sub {reg},a")
+            }
         }
         (
             RotateLeftCarry {
@@ -369,29 +387,32 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
         (ReturnLiteralNotZero(value), Syntax::Legacy) => format!("RETLN 0x{value:02x}"),
         (ReturnLiteralNotZero(value), Syntax::Canonical) => format!("ret z=0,#0x{value:02x}"),
         (MoveIndirect0(value), Syntax::Legacy) => format!("MOVIP 0x{value:03x}"),
-        (MoveIndirect0(value), Syntax::Canonical) => format!("mov p0,#0x{value:03x}"),
+        (MoveIndirect0(value), Syntax::Canonical) => format!("mov ptr0,#0x{value:03x}"),
         (MoveIndirect1(value), Syntax::Legacy) => format!("MOVIA 0x{value:03x}"),
-        (MoveIndirect1(value), Syntax::Canonical) => format!("mov p1,#0x{value:03x}"),
+        (MoveIndirect1(value), Syntax::Canonical) => format!("mov ptr1,#0x{value:03x}"),
         (MoveLiteralFast1(value), Syntax::Legacy) => format!("MOVA1F 0x{value:02x}"),
         (MoveLiteralFast1(value), Syntax::Canonical) => format!("mov pins.dir,#0x{value:02x}"),
         (MoveLiteralFast2(value), Syntax::Legacy) => format!("MOVA2F 0x{value:02x}"),
         (MoveLiteralFast2(value), Syntax::Canonical) => format!("mov pins,#0x{value:02x}"),
         (MoveLiteralIndirect1(value), Syntax::Legacy) => format!("MOVA2P 0x{value:02x}"),
-        (MoveLiteralIndirect1(value), Syntax::Canonical) => format!("mov [p1+],#0x{value:02x}"),
+        (MoveLiteralIndirect1(value), Syntax::Canonical) => {
+            format!("mov [ptr1+],#0x{value:02x}")
+        }
         (MoveLiteralIndirect0(value), Syntax::Legacy) => format!("MOVA1P 0x{value:02x}"),
-        (MoveLiteralIndirect0(value), Syntax::Canonical) => format!("mov [p0],#0x{value:02x}"),
+        (MoveLiteralIndirect0(value), Syntax::Canonical) => format!("mov [ptr0],#0x{value:02x}"),
         (MoveLiteral(value), Syntax::Legacy) => format!("MOVL 0x{value:02x}"),
         // `mov.lit` keeps MOVL #0 distinct from the shorter CLRA encoding while
         // ordinary hand-written canonical source may still use `mov a,#0`.
-        (MoveLiteral(value), Syntax::Canonical) => format!("mov.lit a,#0x{value:02x}"),
+        (MoveLiteral(0), Syntax::Canonical) => "mov.lit a,#0x00".into(),
+        (MoveLiteral(value), Syntax::Canonical) => format!("mov a,#0x{value:02x}"),
         (AndLiteral(value), Syntax::Legacy) => format!("ANDL 0x{value:02x}"),
-        (AndLiteral(value), Syntax::Canonical) => format!("and a,a,#0x{value:02x}"),
+        (AndLiteral(value), Syntax::Canonical) => format!("and a,#0x{value:02x}"),
         (OrLiteral(value), Syntax::Legacy) => format!("IORL 0x{value:02x}"),
-        (OrLiteral(value), Syntax::Canonical) => format!("or a,a,#0x{value:02x}"),
+        (OrLiteral(value), Syntax::Canonical) => format!("or a,#0x{value:02x}"),
         (XorLiteral(value), Syntax::Legacy) => format!("XORL 0x{value:02x}"),
-        (XorLiteral(value), Syntax::Canonical) => format!("xor a,a,#0x{value:02x}"),
+        (XorLiteral(value), Syntax::Canonical) => format!("xor a,#0x{value:02x}"),
         (AddLiteral(value), Syntax::Legacy) => format!("ADDL 0x{value:02x}"),
-        (AddLiteral(value), Syntax::Canonical) => format!("add a,a,#0x{value:02x}"),
+        (AddLiteral(value), Syntax::Canonical) => format!("add a,#0x{value:02x}"),
         (SubtractLiteral(value), Syntax::Legacy) => format!("SUBL 0x{value:02x}"),
         (SubtractLiteral(value), Syntax::Canonical) => format!("sub a,#0x{value:02x},a"),
         (CompareAddLiteral(value), Syntax::Legacy) => format!("CMPLN 0x{value:02x}"),
@@ -426,25 +447,25 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
             format!("BP1F {},{bit}", bit_output(destination, syntax))
         }
         (BitFromIndirect0 { destination, bit }, Syntax::Canonical) => {
-            format!("mov bitio[{}],p0[{bit}]", destination as u8)
+            format!("mov {},ptr0[{bit}]", bit_output(destination, syntax))
         }
         (BitFromExchange { destination, bit }, Syntax::Legacy) => {
             format!("BP2F {},{bit}", bit_output(destination, syntax))
         }
         (BitFromExchange { destination, bit }, Syntax::Canonical) => {
-            format!("mov bitio[{}],xchg[{bit}]", destination as u8)
+            format!("mov {},xchg[{bit}]", bit_output(destination, syntax))
         }
         (BitToIndirect0 { source, bit }, Syntax::Legacy) => {
             format!("BG1F {},{bit}", bit_source(source, syntax))
         }
         (BitToIndirect0 { source, bit }, Syntax::Canonical) => {
-            format!("mov p0[{bit}],bitio[{}]", source as u8)
+            format!("mov ptr0[{bit}],{}", bit_source(source, syntax))
         }
         (BitToExchange { source, bit }, Syntax::Legacy) => {
             format!("BG2F {},{bit}", bit_source(source, syntax))
         }
         (BitToExchange { source, bit }, Syntax::Canonical) => {
-            format!("mov xchg[{bit}],bitio[{}]", source as u8)
+            format!("mov xchg[{bit}],{}", bit_source(source, syntax))
         }
         (Jump(target), _) => format!("jmp 0x{target:03x}"),
         (Call(target), _) => format!("call 0x{target:03x}"),
@@ -467,12 +488,11 @@ pub fn format_instruction(instruction: Instruction, syntax: Syntax) -> String {
 
 fn canonical_alu(name: &str, source: Register, destination: Destination) -> String {
     let register = format_register(source, Syntax::Canonical);
-    let dest = if destination == Destination::Accumulator {
-        "a"
+    if destination == Destination::Accumulator {
+        format!("{name} a,{register}")
     } else {
-        &register
-    };
-    format!("{name} {dest},a,{register}")
+        format!("{name} {register},a")
+    }
 }
 
 #[cfg(test)]

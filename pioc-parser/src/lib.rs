@@ -8,7 +8,7 @@ use thiserror::Error;
 
 pub use assemble::{
     assemble_canonical, assemble_file, assemble_file_with_dependencies, assemble_file_with_syntax,
-    assemble_legacy,
+    assemble_legacy, translate_legacy, translate_legacy_file,
 };
 pub use print::{format_decoded, format_instruction, format_register};
 

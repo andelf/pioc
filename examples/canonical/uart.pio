@@ -1,0 +1,939 @@
+.program pioc_uart
+
+
+
+
+    .origin 0x0000
+    .word 0x0000
+    jmp mcu_start
+    .word 0x0fff
+
+    .alias uart_tx_freq = d0
+    .alias uart_tx_cnt = d1
+    .alias uart_tx_half_cnt = d2
+    .alias uart_tx_ctrl = d3
+    .alias uart_rx_freq = d4
+    .alias uart_rx_cnt = d5
+    .alias uart_rx_ctlr = d6
+    .alias uart_tx_rx_flag = d7
+
+    .alias var_size_l = d24
+    .alias var_size_h = d25
+    .alias uart_tx_check = d26
+    .alias uart_tx_i = d27
+    .alias uart_rx_check = d28
+    .alias uart_rx_var = d29
+    .alias uart_rx_sr = d30
+    .alias uart_rx_data = d31
+
+delay_5nop:
+    nop
+    ret
+
+
+uart_tx:
+    mov.lit a,#0x00
+    mov timer0.reload,a
+    mov a,uart_tx_freq
+    mov timer0.ctrl,a
+tx_next:
+    bclr pins.out1
+    clr timer0.count
+    mov a,[ptr1+]
+    mov xchg,a
+    skip set,uart_tx_ctrl[3]
+    bclr uart_tx_check[0]
+tx_start:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_start
+    skip clear,uart_tx_ctrl[3]
+    bset uart_tx_check[0]
+    nop
+    mov pins.out1,xchg[0]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+tx_bit0:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit0
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[1]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+tx_bit1:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit1
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[2]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+tx_bit2:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit2
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[3]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+tx_bit3:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit3
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[4]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+    nop
+    skip clear,uart_tx_rx_flag[5]
+    jmp tx_bit_len
+    nop
+tx_bit4:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit4
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[5]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+    nop
+    skip clear,uart_tx_rx_flag[6]
+    jmp tx_bit_len
+    nop
+tx_bit5:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit5
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[6]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+    nop
+    skip clear,uart_tx_rx_flag[7]
+    jmp tx_bit_len
+    nop
+tx_bit6:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit6
+    nop
+    nop
+    nop
+    mov pins.out1,xchg[7]
+    clr timer0.count
+    mov a,uart_tx_check
+    mov c,pins.in1
+    rolc uart_tx_check
+    xor uart_tx_check,a
+tx_bit_len:
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h
+    nop
+    nop
+    nop
+    mov a,uart_tx_check
+    skip set,uart_tx_rx_flag[4]
+    jmp tx_check_0
+    clr a
+    skip clear,uart_tx_ctrl[3]
+    add a,#0x01
+    nop
+    nop
+tx_check_0:
+    mov xchg,a
+tx_bit7:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_bit7
+    skip set,uart_tx_ctrl[2]
+    jmp tx_check_none
+    nop
+    mov pins.out1,xchg[0]
+    clr timer0.count
+tx_check:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_check
+    nop
+    nop
+    nop
+tx_check_none:
+    bset pins.out1
+    clr timer0.count
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,tx_stop_final
+    dec uart_tx_i
+    jmp nz,tx_nor_req
+    skip clear,uart_tx_rx_flag[1]
+    mov ptr1,#sfr_data_reg8
+    mov a,#0x02
+    xor uart_tx_rx_flag,a
+    mov a,#0x08
+    mov uart_tx_i,a
+    bset sys.irq_request
+    nop
+    nop
+tx_nor_req:
+    nop
+    nop
+tx_stop:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_stop
+    skip set,uart_tx_ctrl[0]
+    jmp tx_next
+    mov a,uart_tx_half_cnt
+    mov timer0.count,a
+tx_stop1:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_stop1
+    skip set,uart_tx_ctrl[4]
+    jmp tx_stop1_1
+    jmp tx_stop1_1
+tx_stop1_1:
+    skip set,uart_tx_ctrl[5]
+    jmp tx_stop1_2
+    nop
+    jmp tx_stop1_2
+tx_stop1_2:
+    skip set,uart_tx_ctrl[1]
+    jmp tx_next
+    mov a,uart_tx_half_cnt
+    mov timer0.count,a
+tx_stop2:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_stop2
+    skip set,uart_tx_ctrl[6]
+    jmp tx_stop2_1
+    jmp tx_stop2_1
+tx_stop2_1:
+    skip set,uart_tx_ctrl[7]
+    jmp tx_stop2_2
+    nop
+    jmp tx_stop2_2
+tx_stop2_2:
+    nop
+    jmp tx_next
+
+tx_stop_final:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_stop_final
+    skip set,uart_tx_ctrl[0]
+    jmp uart_rx
+    mov a,uart_tx_half_cnt
+    mov timer0.count,a
+tx_stop_final1:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_stop_final1
+    skip set,uart_tx_ctrl[4]
+    jmp tx_stop_final1_1
+    jmp tx_stop_final1_1
+tx_stop_final1_1:
+    skip set,uart_tx_ctrl[5]
+    jmp tx_stop_final1_2
+    nop
+    jmp tx_stop_final1_2
+tx_stop_final1_2:
+    skip set,uart_tx_ctrl[1]
+    jmp uart_rx
+    mov a,uart_tx_half_cnt
+    mov timer0.count,a
+tx_stop_final2:
+    mov a,timer0.count
+    add a,uart_tx_cnt
+    jmp nc,tx_stop_final2
+    skip set,uart_tx_ctrl[6]
+    jmp tx_stop_final2_1
+    jmp tx_stop_final2_1
+tx_stop_final2_1:
+    skip set,uart_tx_ctrl[7]
+    jmp tx_stop_final2_2
+    nop
+    jmp tx_stop_final2_2
+tx_stop_final2_2:
+    nop
+    jmp uart_rx
+
+uart_rx:
+    bclr uart_tx_rx_flag[0]
+    mov.lit a,#0x00
+    mov timer0.reload,a
+    mov a,uart_rx_freq
+    mov timer0.ctrl,a
+rx_wait:
+    wait io0_unchanged
+    wait io0_changed
+    clr timer0.count
+    clr uart_rx_check
+    clr xchg
+    clr uart_rx_var
+    nop
+rx_start_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_start_0
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_start_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_start_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_start_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_start_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    jmp rx_wait
+    nop
+    nop
+rx_start_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_start_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit0_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit0_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit0_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit0_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit0_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit0_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[0]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit0_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit0_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit1_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit1_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit1_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit1_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit1_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit1_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[1]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit1_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit1_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit2_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit2_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit2_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit2_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit2_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit2_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[2]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit2_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit2_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit3_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit3_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit3_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit3_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit3_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit3_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[3]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit3_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit3_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit4_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit4_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit4_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit4_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit4_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit4_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[4]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit4_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit4_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit5_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit5_0
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_tx_rx_flag[5]
+    jmp rx_check
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit5_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit5_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit5_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit5_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[5]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit5_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit5_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit6_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit6_0
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_tx_rx_flag[6]
+    jmp rx_check
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit6_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit6_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit6_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit6_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[6]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit6_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit6_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_bit7_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit7_0
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_tx_rx_flag[7]
+    jmp rx_check
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit7_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit7_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    nop
+    nop
+    nop
+    nop
+rx_bit7_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit7_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    bset xchg[7]
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+rx_bit7_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_bit7_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_check_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_check_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+rx_check:
+    clr timer0.count
+    skip set,uart_rx_ctlr[1]
+    jmp rx_stop
+    nop
+    nop
+rx_check_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_check_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_tx_rx_flag[4]
+    clr uart_rx_check
+    nop
+    nop
+rx_check_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_check_2
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[5]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[1]
+    inc uart_rx_check
+    mov a,uart_rx_ctlr
+    xor uart_rx_check,a
+rx_check_3:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_check_3
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_ctlr[4]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    clr uart_rx_var
+    nop
+rx_stop_0:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_stop_0
+    nop
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    nop
+    clr timer0.count
+    skip clear,uart_rx_check[0]
+    bset uart_rx_sr[0]
+    nop
+rx_stop:
+    nop
+rx_stop_1:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_stop_1
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip clear,uart_rx_ctlr[6]
+    call delay_5nop
+    clr timer0.count
+    skip clear,uart_rx_ctlr[7]
+    jmp rx_stop_3
+    nop
+    nop
+rx_stop_2:
+    mov a,timer0.count
+    add a,uart_rx_cnt
+    jmp nc,rx_stop_2
+rx_stop_3:
+    mov c,pins.in0
+    skip clear,status.carry
+    inc uart_rx_var
+    skip set,uart_rx_var[1]
+    bset uart_rx_sr[1]
+    mov a,uart_rx_var
+    rorc uart_rx_var
+    xor uart_rx_var,a
+    skip clear,uart_rx_var[0]
+    bset uart_rx_sr[2]
+    mov a,xchg
+    mov uart_rx_data,a
+    bset sys.irq_request
+    jmp rx_wait
+
+
+mcu_start:
+    nop
+    nop
+    bset pins.out1
+    bset pins.out0
+    mov pins.dir,#0b00000010
+    wait host_to_core_pending
+    mov a,#0x08
+    mov uart_tx_i,a
+    clr uart_rx_sr
+    mov ptr1,#sfr_data_reg8
+    skip clear,uart_tx_rx_flag[0]
+    jmp uart_tx
+    jmp uart_rx
+    jmp mcu_start
+
+    .end
+

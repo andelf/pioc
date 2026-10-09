@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use pioc_core::{DecodeTarget, Instruction};
-use pioc_parser::{assemble_canonical, assemble_file, format_decoded, Syntax};
+use pioc_parser::{
+    assemble_canonical, assemble_file, format_decoded, translate_legacy_file, Syntax,
+};
 
 fn corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ch32x035-main/EVT/EXAM/PIOC")
@@ -75,6 +77,56 @@ fn official_examples_match_vendor_bins_byte_for_byte() {
             assembled.to_le_bytes(),
             expected,
             "vendor mismatch for {asm}"
+        );
+    }
+}
+
+#[test]
+fn official_examples_translate_to_canonical_byte_for_byte() {
+    let root = corpus_root();
+    if !root.exists() {
+        eprintln!("skipping external WCH corpus at {}", root.display());
+        return;
+    }
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/canonical");
+    let cases = [
+        ("1_Wire/Asm/RGB1W.ASM", "1_Wire/Asm/RGB1W.BIN", "rgb1w.pio"),
+        (
+            "PIOC_IIC/Asm/PIOC_IIC.ASM",
+            "PIOC_IIC/Asm/PIOC_IIC.BIN",
+            "i2c.pio",
+        ),
+        (
+            "PIOC_NEC/Asm/PIOC_NEC.ASM",
+            "PIOC_NEC/Asm/PIOC_NEC.BIN",
+            "nec.pio",
+        ),
+        (
+            "PIOC_Single_Wire/Asm/PIOC_Single_Wire.ASM",
+            "PIOC_Single_Wire/Asm/PIOC_Single_Wire.BIN",
+            "single-wire.pio",
+        ),
+        (
+            "PIOC_UART/Ams/PIOC_UART.ASM",
+            "PIOC_UART/Ams/PIOC_UART.BIN",
+            "uart.pio",
+        ),
+    ];
+
+    for (asm, bin, checked_in) in cases {
+        let canonical = translate_legacy_file(root.join(asm))
+            .unwrap_or_else(|error| panic!("failed to translate {asm}: {error}"));
+        assert_eq!(
+            canonical,
+            std::fs::read_to_string(examples.join(checked_in)).unwrap(),
+            "checked-in canonical source is stale for {asm}"
+        );
+        let assembled = assemble_canonical(&canonical)
+            .unwrap_or_else(|error| panic!("failed to assemble translated {asm}: {error}"));
+        assert_eq!(
+            assembled.to_le_bytes(),
+            std::fs::read(root.join(bin)).unwrap(),
+            "translated canonical mismatch for {asm}"
         );
     }
 }

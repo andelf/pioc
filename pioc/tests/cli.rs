@@ -52,3 +52,46 @@ fn full_image_is_4096_bytes() {
         .success());
     assert_eq!(std::fs::metadata(output).unwrap().len(), 4096);
 }
+
+#[test]
+fn translate_output_reassembles_to_the_same_bytes() {
+    let directory = scratch("translate");
+    let legacy = directory.join("input.asm");
+    let canonical = directory.join("output.pio");
+    let legacy_bin = directory.join("legacy.bin");
+    let canonical_bin = directory.join("canonical.bin");
+    std::fs::write(
+        &legacy,
+        "ORG 0\nDW 0\nCOUNT EQU SFR_DATA_REG0\nSTART: MOVL 3\nMOVA COUNT\nJNZ START\nEND\n",
+    )
+    .unwrap();
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_pioc"))
+        .args(["translate"])
+        .arg(&legacy)
+        .args(["-o"])
+        .arg(&canonical)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new(env!("CARGO_BIN_EXE_pioc"))
+        .args(["assemble"])
+        .arg(&legacy)
+        .args(["-o"])
+        .arg(&legacy_bin)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new(env!("CARGO_BIN_EXE_pioc"))
+        .args(["assemble", "--canonical"])
+        .arg(&canonical)
+        .args(["-o"])
+        .arg(&canonical_bin)
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        std::fs::read(canonical_bin).unwrap(),
+        std::fs::read(legacy_bin).unwrap()
+    );
+}

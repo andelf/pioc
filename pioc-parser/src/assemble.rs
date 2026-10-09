@@ -85,6 +85,30 @@ pub fn assemble_file_with_dependencies(
     Ok((assemble_lines(&lines, syntax)?, dependencies))
 }
 
+/// Translate legacy WCH assembly into label-preserving canonical source.
+pub fn translate_legacy(source: &str) -> Result<String, ParseError> {
+    let lines = source
+        .lines()
+        .enumerate()
+        .map(|(index, text)| SourceLine {
+            path: "<memory>".into(),
+            number: index + 1,
+            text: text.into(),
+        })
+        .collect::<Vec<_>>();
+    translate_lines(&lines, None)
+}
+
+/// Translate a legacy source file, expanding its `INCLUDE` dependencies.
+pub fn translate_legacy_file(path: impl AsRef<Path>) -> Result<String, ParseError> {
+    let path = path.as_ref();
+    let mut lines = Vec::new();
+    let mut dependencies = Vec::new();
+    expand_file(path, &mut lines, &mut dependencies, 0)?;
+    let program_name = path.file_stem().and_then(|name| name.to_str());
+    translate_lines(&lines, program_name)
+}
+
 fn expand_file(
     path: &Path,
     output: &mut Vec<SourceLine>,
@@ -131,6 +155,339 @@ fn expand_file(
         }
     }
     Ok(())
+}
+
+fn translate_lines(lines: &[SourceLine], program_name: Option<&str>) -> Result<String, ParseError> {
+    let parsed = lines
+        .iter()
+        .map(parse_line)
+        .collect::<Result<Vec<_>, _>>()?;
+    let symbols = collect_symbols(&parsed)?;
+    let builtins = builtin_symbols();
+    let mut output = String::new();
+    if let Some(name) = program_name {
+        output.push_str(&format!(".program {}\n\n", name.to_ascii_lowercase()));
+    }
+
+    for line in &parsed {
+        if Path::new(&line.source.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("PIOC_INC.ASM"))
+        {
+            continue;
+        }
+        let comment = line
+            .source
+            .text
+            .split_once(';')
+            .map(|(_, comment)| comment.trim());
+        let body = match &line.statement {
+            Statement::Empty => String::new(),
+            Statement::Equ { name, value } => {
+                let evaluated = eval(value, &symbols, line)?;
+                if builtins
+                    .get(name)
+                    .is_some_and(|builtin| *builtin == evaluated)
+                {
+                    continue;
+                }
+                let rhs = translate_equ_value(value, &symbols, line)?;
+                let directive = if looks_like_register_alias(value, &symbols, line) {
+                    ".alias"
+                } else {
+                    ".const"
+                };
+                format!("{directive} {} = {rhs}", name.to_ascii_lowercase())
+            }
+            Statement::Org(value) => format!(".origin {}", value.to_ascii_lowercase()),
+            Statement::Word(value) => format!(".word {}", value.to_ascii_lowercase()),
+            Statement::Instruction { mnemonic, operands } => {
+                translate_instruction(mnemonic, operands, &symbols, line)?
+            }
+            Statement::End => ".end".into(),
+        };
+
+        if let Some(label) = &line.label {
+            output.push_str(&label.to_ascii_lowercase());
+            output.push(':');
+            if !body.is_empty() {
+                output.push('\n');
+                output.push_str("    ");
+                output.push_str(&body);
+            }
+        } else if !body.is_empty() {
+            output.push_str("    ");
+            output.push_str(&body);
+        }
+        if let Some(comment) = comment.filter(|comment| !comment.is_empty()) {
+            if !body.is_empty() || line.label.is_some() {
+                output.push_str("    ");
+            }
+            output.push_str("; ");
+            output.push_str(comment);
+        }
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn collect_symbols(parsed: &[ParsedLine]) -> Result<HashMap<String, u16>, ParseError> {
+    let mut symbols = builtin_symbols();
+    let mut pc = 0u16;
+    for line in parsed {
+        if let Some(label) = &line.label {
+            insert_symbol(&mut symbols, label, pc, line)?;
+        }
+        match &line.statement {
+            Statement::Empty => {}
+            Statement::Equ { name, value } => {
+                let value = eval(value, &symbols, line)?;
+                insert_symbol(&mut symbols, name, value, line)?;
+            }
+            Statement::Org(value) => pc = eval(value, &symbols, line)?,
+            Statement::Word(_) | Statement::Instruction { .. } => {
+                pc = pc
+                    .checked_add(1)
+                    .ok_or_else(|| line_error(line, "program counter overflow"))?;
+            }
+            Statement::End => break,
+        }
+    }
+    Ok(symbols)
+}
+
+fn translate_equ_value(
+    value: &str,
+    symbols: &HashMap<String, u16>,
+    line: &ParsedLine,
+) -> Result<String, ParseError> {
+    if looks_like_register_alias(value, symbols, line) {
+        return canonical_register(value, symbols, line)
+            .map(|register| crate::format_register(register, Syntax::Canonical));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn looks_like_register_alias(
+    value: &str,
+    symbols: &HashMap<String, u16>,
+    line: &ParsedLine,
+) -> bool {
+    let upper = value.trim().to_ascii_uppercase();
+    upper.starts_with("SFR_")
+        || upper.starts_with('D')
+            && upper[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit())
+        || matches!(
+            upper.as_str(),
+            "PTR0"
+                | "PTR1"
+                | "P0"
+                | "P1"
+                | "PCL"
+                | "STATUS"
+                | "TIMER0.COUNT"
+                | "TIMER0.CTRL"
+                | "TIMER0.RELOAD"
+                | "CODEC.PERIOD"
+                | "CODEC.CTRL"
+                | "PINS.DIR"
+                | "PINS"
+                | "SYS.CTRL"
+                | "CMD.OUT"
+                | "CMD.IN"
+                | "XCHG"
+        ) && canonical_register(value, symbols, line).is_ok()
+}
+
+fn translated_register(
+    text: &str,
+    symbols: &HashMap<String, u16>,
+    line: &ParsedLine,
+) -> Result<String, ParseError> {
+    let upper = text.trim().to_ascii_uppercase();
+    if upper.starts_with("SFR_") || parse_number(text).is_some() {
+        let register = canonical_register(text, symbols, line)?;
+        Ok(crate::format_register(register, Syntax::Canonical))
+    } else {
+        Ok(text.trim().to_ascii_lowercase())
+    }
+}
+
+fn translated_bit(
+    register_text: &str,
+    bit_text: &str,
+    symbols: &HashMap<String, u16>,
+    line: &ParsedLine,
+) -> Result<String, ParseError> {
+    let register = canonical_register(register_text, symbols, line)?;
+    let bit = narrow(eval(bit_text, symbols, line)?, 7, "bit", line)? as u8;
+    if register.address() == 0x01 {
+        return Ok(format!("[ptr1][{}]", bit_text.trim().to_ascii_lowercase()));
+    }
+    if register_text
+        .trim()
+        .to_ascii_uppercase()
+        .starts_with("SFR_")
+    {
+        if let Some(name) = pioc_core::canonical_bit_name(register, bit) {
+            return Ok(name.into());
+        }
+    }
+    Ok(format!(
+        "{}[{}]",
+        translated_register(register_text, symbols, line)?,
+        bit_text.trim().to_ascii_lowercase()
+    ))
+}
+
+fn immediate(text: &str) -> String {
+    format!(
+        "#{}",
+        text.trim().trim_start_matches('#').to_ascii_lowercase()
+    )
+}
+
+fn translate_instruction(
+    mnemonic: &str,
+    operands: &[String],
+    symbols: &HashMap<String, u16>,
+    line: &ParsedLine,
+) -> Result<String, ParseError> {
+    let instruction = lower_legacy(mnemonic, operands, symbols, line)?;
+    let operand = |index: usize| operand_text(operands, index, line);
+    let reg = |index: usize| translated_register(operand(index)?, symbols, line);
+    let bit = || translated_bit(operand(0)?, operand(1)?, symbols, line);
+    let target = |index: usize| -> Result<String, ParseError> {
+        Ok(operand(index)?.trim().to_ascii_lowercase())
+    };
+    let byte_destination = |source: &str| -> String {
+        if operands
+            .get(1)
+            .is_some_and(|destination| destination.eq_ignore_ascii_case("A") || destination == "0")
+        {
+            "a".into()
+        } else {
+            source.into()
+        }
+    };
+
+    Ok(match mnemonic {
+        "NOP" | "CLRA" | "CLRWDT" | "WDT" | "SLEEP" | "HALT" | "WAITRD" | "WAITWR" | "WAITSPI"
+        | "RDCODE" | "WRCODE" | "PUSHAS" | "PUSH" | "POPAS" | "POP" | "PUSHA2" | "POPA2"
+        | "RET" | "RETURN" | "RETZ" | "RETOK" | "RETIE" | "RETI" => {
+            crate::format_instruction(instruction, Syntax::Canonical)
+        }
+        "SLEEPX" => format!("sleep {}", immediate(operand(0)?)),
+        "WAITB" => crate::format_instruction(instruction, Syntax::Canonical),
+        "RCODE" => format!("code.read {}", immediate(operand(0)?)),
+        "EXEC" => format!("exec {}", immediate(operand(0)?)),
+        "BCTC" => crate::format_instruction(instruction, Syntax::Canonical),
+        "CLR" | "CLRF" => format!("clr {}", reg(0)?),
+        "MOVA" => {
+            let destination = if canonical_register(operand(0)?, symbols, line)?.address() == 0x01 {
+                "[ptr1+]".into()
+            } else {
+                reg(0)?
+            };
+            format!("mov {destination},a")
+        }
+        "MOV" | "MOVF" => {
+            let source = if canonical_register(operand(0)?, symbols, line)?.address() == 0x01 {
+                "[ptr1+]".into()
+            } else {
+                reg(0)?
+            };
+            format!("mov {},{source}", byte_destination(&source))
+        }
+        "INC" | "INCF" | "DEC" | "DECF" | "INCSZ" | "INCFSZ" | "DECSZ" | "DECFSZ" | "SWAP"
+        | "SWAPF" | "RCL" | "RCLF" | "RLF" | "RCR" | "RCRF" | "RRF" => {
+            let source = reg(0)?;
+            let name = match mnemonic {
+                "INC" | "INCF" => "inc",
+                "DEC" | "DECF" => "dec",
+                "INCSZ" | "INCFSZ" => "inc.skipz",
+                "DECSZ" | "DECFSZ" => "dec.skipz",
+                "SWAP" | "SWAPF" => "swap.nibbles",
+                "RCL" | "RCLF" | "RLF" => "rolc",
+                _ => "rorc",
+            };
+            let destination = byte_destination(&source);
+            if destination == source {
+                format!("{name} {source}")
+            } else {
+                format!("{name} {destination},{source}")
+            }
+        }
+        "AND" | "ANDF" | "IOR" | "IORF" | "XOR" | "XORF" | "ADD" | "ADDF" | "SUB" | "SUBF" => {
+            let source = reg(0)?;
+            let destination = byte_destination(&source);
+            let name = match mnemonic {
+                "AND" | "ANDF" => "and",
+                "IOR" | "IORF" => "or",
+                "XOR" | "XORF" => "xor",
+                "ADD" | "ADDF" => "add",
+                _ => "sub",
+            };
+            if mnemonic == "SUB" || mnemonic == "SUBF" {
+                if destination == source {
+                    format!("sub {source},a")
+                } else {
+                    format!("sub a,{source},a")
+                }
+            } else if destination == source {
+                format!("{name} {source},a")
+            } else {
+                format!("{name} a,{source}")
+            }
+        }
+        "RETL" => format!("ret {}", immediate(operand(0)?)),
+        "RETLN" | "RETER" => format!("ret z=0,{}", immediate(operand(0)?)),
+        "MOVIP" => format!("mov ptr0,{}", immediate(operand(0)?)),
+        "MOVIA" => format!("mov ptr1,{}", immediate(operand(0)?)),
+        "MOVA1F" => format!("mov pins.dir,{}", immediate(operand(0)?)),
+        "MOVA2F" => format!("mov pins,{}", immediate(operand(0)?)),
+        "MOVA2P" => format!("mov [ptr1+],{}", immediate(operand(0)?)),
+        "MOVA1P" => format!("mov [ptr0],{}", immediate(operand(0)?)),
+        "MOVL" => {
+            if matches!(instruction, Instruction::MoveLiteral(0)) {
+                // Only zero needs an explicit encoding escape: plain `mov a,#0`
+                // intentionally selects the shorter CLRA instruction.
+                format!("mov.lit a,{}", immediate(operand(0)?))
+            } else {
+                format!("mov a,{}", immediate(operand(0)?))
+            }
+        }
+        "ANDL" | "IORL" | "ORL" | "XORL" | "ADDL" => {
+            let name = match mnemonic {
+                "ANDL" => "and",
+                "IORL" | "ORL" => "or",
+                "XORL" => "xor",
+                _ => "add",
+            };
+            format!("{name} a,{}", immediate(operand(0)?))
+        }
+        "SUBL" => format!("sub a,{},a", immediate(operand(0)?)),
+        "CMPLN" => format!("flags.add {},a", immediate(operand(0)?)),
+        "CMPL" => format!("flags.sub {},a", immediate(operand(0)?)),
+        "BC" | "BCF" => format!("bclr {}", bit()?),
+        "BS" | "BSF" => format!("bset {}", bit()?),
+        "BTSC" | "BTFSC" => format!("skip clear,{}", bit()?),
+        "BTSS" | "BTFSS" => format!("skip set,{}", bit()?),
+        "BP1F" | "BP2F" | "BG1F" | "BG2F" => {
+            crate::format_instruction(instruction, Syntax::Canonical)
+        }
+        "JMP" | "GOTO" => format!("jmp {}", target(0)?),
+        "CALL" => format!("call {}", target(0)?),
+        "JNZ" => format!("jmp nz,{}", target(0)?),
+        "JZ" => format!("jmp z,{}", target(0)?),
+        "JNC" => format!("jmp nc,{}", target(0)?),
+        "JC" => format!("jmp c,{}", target(0)?),
+        "CMPZ" => format!("jmp a == {},{}", immediate(operand(0)?), target(1)?),
+        _ => crate::format_instruction(instruction, Syntax::Canonical),
+    })
 }
 
 fn assemble_lines(lines: &[SourceLine], syntax: Syntax) -> Result<Program, ParseError> {
@@ -271,6 +628,23 @@ fn parse_line(source: &SourceLine) -> Result<ParsedLine, ParseError> {
             Statement::Equ {
                 name: name.to_ascii_uppercase(),
                 value,
+            }
+        }
+        ".ALIAS" | ".CONST" => {
+            let (name, value) = rest
+                .split_once('=')
+                .map(|(name, value)| (name.trim(), value.trim()))
+                .or_else(|| {
+                    let mut fields = rest.splitn(2, char::is_whitespace);
+                    Some((fields.next()?, fields.next()?.trim()))
+                })
+                .ok_or_else(|| line_error_raw(source, "expected name = value"))?;
+            if name.is_empty() || value.is_empty() {
+                return Err(line_error_raw(source, "expected name = value"));
+            }
+            Statement::Equ {
+                name: name.to_ascii_uppercase(),
+                value: value.into(),
             }
         }
         "INCLUDE" => {
@@ -556,7 +930,7 @@ fn lower_canonical(
         }),
         "PUSH" => {
             let joined = operands.join(",").to_ascii_lowercase();
-            if joined.contains("p1") {
+            if joined.contains("ptr1") || joined.contains("p1") {
                 Ok(PushIndirect1)
             } else {
                 Ok(PushAccumulatorStatus)
@@ -564,7 +938,7 @@ fn lower_canonical(
         }
         "POP" => {
             let joined = operands.join(",").to_ascii_lowercase();
-            if joined.contains("p1") {
+            if joined.contains("ptr1") || joined.contains("p1") {
                 Ok(PopIndirect1)
             } else {
                 Ok(PopAccumulatorStatus)
@@ -603,9 +977,15 @@ fn lower_canonical(
             Ok(MoveLiteral(eval8(&operands[1], symbols, line)?))
         }
         "INC" | "DEC" | "INC.SKIPZ" | "DEC.SKIPZ" | "SWAP.NIBBLES" | "ROLC" | "RORC" => {
-            expect_len(operands, 2, line)?;
-            let source = reg(1)?;
-            let destination = destination(&operands[0], source)?;
+            if operands.is_empty() || operands.len() > 2 {
+                return Err(line_error(line, "expected one or two operands"));
+            }
+            let (source, destination) = if operands.len() == 1 {
+                (reg(0)?, Destination::Register)
+            } else {
+                let source = reg(1)?;
+                (source, destination(&operands[0], source)?)
+            };
             Ok(match mnemonic {
                 "INC" => Increment {
                     source,
@@ -637,10 +1017,22 @@ fn lower_canonical(
                 },
             })
         }
+        "XOR"
+            if operands.len() == 2
+                && operands[0].eq_ignore_ascii_case("c")
+                && matches!(
+                    operands[1].trim().to_ascii_lowercase().as_str(),
+                    "pins.in0" | "pins.input0" | "carry_xor_io0"
+                ) =>
+        {
+            Ok(BitToCarry(BitInput::CarryXorIo0))
+        }
         "AND" | "OR" | "XOR" | "ADD" => {
-            expect_len(operands, 3, line)?;
-            if operands[2].trim().starts_with('#') {
-                let immediate = eval8(&operands[2], symbols, line)?;
+            if operands.len() == 2 && operands[1].trim().starts_with('#') {
+                if !operands[0].eq_ignore_ascii_case("a") {
+                    return Err(line_error(line, "literal ALU destination must be a"));
+                }
+                let immediate = eval8(&operands[1], symbols, line)?;
                 return Ok(match mnemonic {
                     "AND" => AndLiteral(immediate),
                     "OR" => OrLiteral(immediate),
@@ -648,8 +1040,22 @@ fn lower_canonical(
                     _ => AddLiteral(immediate),
                 });
             }
-            let source = reg(2)?;
-            let destination = destination(&operands[0], source)?;
+            let (source, destination) = if operands.len() == 2 {
+                if operands[0].eq_ignore_ascii_case("a") {
+                    (reg(1)?, Destination::Accumulator)
+                } else if operands[1].eq_ignore_ascii_case("a") {
+                    (reg(0)?, Destination::Register)
+                } else {
+                    return Err(line_error(
+                        line,
+                        "two-operand ALU form must read or write a",
+                    ));
+                }
+            } else {
+                expect_len(operands, 3, line)?;
+                let source = reg(2)?;
+                (source, destination(&operands[0], source)?)
+            };
             Ok(match mnemonic {
                 "AND" => And {
                     source,
@@ -670,6 +1076,15 @@ fn lower_canonical(
             })
         }
         "SUB" => {
+            if operands.len() == 2
+                && !operands[0].eq_ignore_ascii_case("a")
+                && operands[1].eq_ignore_ascii_case("a")
+            {
+                return Ok(Subtract {
+                    source: reg(0)?,
+                    destination: Destination::Register,
+                });
+            }
             expect_len(operands, 3, line)?;
             if operands[1].trim().starts_with('#') {
                 Ok(SubtractLiteral(eval8(&operands[1], symbols, line)?))
@@ -732,10 +1147,46 @@ fn lower_canonical_mov(
     let dst_lower = dst.to_ascii_lowercase();
     let src_lower = src.to_ascii_lowercase();
 
-    if dst_lower == "c" && src_lower.starts_with("bitin[") {
-        return Ok(BitToCarry(BitInput::from_bits(parse_index(
-            src, symbols, line,
-        )?)));
+    if dst_lower == "c" {
+        if let Some(input) = canonical_bit_input(&src_lower) {
+            return Ok(BitToCarry(input));
+        }
+        if src_lower.starts_with("bitin[") {
+            return Ok(BitToCarry(BitInput::from_bits(parse_index(
+                src, symbols, line,
+            )?)));
+        }
+    }
+    if let Some(endpoint) = canonical_bit_output(&dst_lower) {
+        let (register, bit) = parse_register_bit(src, symbols, line)?;
+        return match register.address() {
+            0x04 => Ok(BitFromIndirect0 {
+                destination: endpoint,
+                bit,
+            }),
+            0x1f => Ok(BitFromExchange {
+                destination: endpoint,
+                bit,
+            }),
+            _ => Err(line_error(line, "bit endpoint source must be ptr0 or xchg")),
+        };
+    }
+    if let Some(endpoint) = canonical_bit_source(&src_lower) {
+        let (register, bit) = parse_register_bit(dst, symbols, line)?;
+        return match register.address() {
+            0x04 => Ok(BitToIndirect0 {
+                source: endpoint,
+                bit,
+            }),
+            0x1f => Ok(BitToExchange {
+                source: endpoint,
+                bit,
+            }),
+            _ => Err(line_error(
+                line,
+                "bit endpoint destination must be ptr0 or xchg",
+            )),
+        };
     }
     if dst_lower.starts_with("bitio[") {
         let endpoint = BitIo::from_bits(parse_index(dst, symbols, line)?);
@@ -749,7 +1200,7 @@ fn lower_canonical_mov(
                 destination: endpoint,
                 bit,
             }),
-            _ => Err(line_error(line, "bitio source must be p0 or xchg")),
+            _ => Err(line_error(line, "bitio source must be ptr0 or xchg")),
         };
     }
     if src_lower.starts_with("bitio[") {
@@ -764,7 +1215,7 @@ fn lower_canonical_mov(
                 source: endpoint,
                 bit,
             }),
-            _ => Err(line_error(line, "bitio destination must be p0 or xchg")),
+            _ => Err(line_error(line, "bitio destination must be ptr0 or xchg")),
         };
     }
 
@@ -773,12 +1224,16 @@ fn lower_canonical_mov(
         return Ok(match dst_lower.as_str() {
             "a" if immediate == 0 => ClearAccumulator,
             "a" => MoveLiteral(narrow(immediate, 0xff, "literal", line)? as u8),
-            "p0" => MoveIndirect0(immediate),
-            "p1" => MoveIndirect1(immediate),
+            "ptr0" | "p0" => MoveIndirect0(immediate),
+            "ptr1" | "p1" => MoveIndirect1(immediate),
             "pins.dir" => MoveLiteralFast1(narrow(immediate, 0xff, "literal", line)? as u8),
             "pins" => MoveLiteralFast2(narrow(immediate, 0xff, "literal", line)? as u8),
-            "[p1+]" => MoveLiteralIndirect1(narrow(immediate, 0xff, "literal", line)? as u8),
-            "[p0]" => MoveLiteralIndirect0(narrow(immediate, 0xff, "literal", line)? as u8),
+            "[ptr1+]" | "[p1+]" => {
+                MoveLiteralIndirect1(narrow(immediate, 0xff, "literal", line)? as u8)
+            }
+            "[ptr0]" | "[p0]" => {
+                MoveLiteralIndirect0(narrow(immediate, 0xff, "literal", line)? as u8)
+            }
             _ if immediate == 0 => Clear(canonical_register(dst, symbols, line)?),
             _ => {
                 return Err(line_error(
@@ -843,16 +1298,16 @@ fn canonical_register(
 ) -> Result<Register, ParseError> {
     let lower = name.trim().to_ascii_lowercase();
     let address = match lower.as_str() {
-        "idata0" => 0x00,
-        "idata1" => 0x01,
+        "[ptr0]" | "idata0" => 0x00,
+        "[ptr1+]" | "[ptr1]" | "idata1" => 0x01,
         "pcl" => 0x02,
         "status" => 0x03,
-        "p0" => 0x04,
+        "ptr0" | "p0" => 0x04,
         "timer0.count" => 0x05,
         "timer0.ctrl" => 0x06,
         "timer0.reload" => 0x07,
         "codec.period" => 0x08,
-        "p1" => 0x09,
+        "ptr1" | "p1" => 0x09,
         "pins.dir" => 0x0a,
         "pins" => 0x0b,
         "codec.ctrl" => 0x0c,
@@ -860,15 +1315,50 @@ fn canonical_register(
         "cmd.out" => 0x1d,
         "cmd.in" => 0x1e,
         "xchg" => 0x1f,
-        _ if lower.starts_with('d') => lower[1..]
-            .parse::<u16>()
-            .ok()
-            .filter(|index| *index < 32)
-            .map(|index| 0x20 + index)
-            .ok_or_else(|| line_error(line, "data register must be d0..d31"))?,
+        _ if lower.starts_with('d')
+            && lower[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit()) =>
+        {
+            lower[1..]
+                .parse::<u16>()
+                .ok()
+                .filter(|index| *index < 32)
+                .map(|index| 0x20 + index)
+                .ok_or_else(|| line_error(line, "data register must be d0..d31"))?
+        }
         _ => eval(name, symbols, line)?,
     };
     Register::new(address).ok_or_else(|| line_error(line, "register address exceeds 0x1ff"))
+}
+
+fn canonical_bit_input(name: &str) -> Option<BitInput> {
+    Some(match name {
+        "codec.rx_bit" | "codec_rx" => BitInput::CodecRx,
+        "pins.in0" | "pins.input0" | "io0" => BitInput::Io0,
+        "pins.in1" | "pins.input1" | "io1" => BitInput::Io1,
+        _ => return None,
+    })
+}
+
+fn canonical_bit_output(name: &str) -> Option<BitIo> {
+    Some(match name {
+        "status.carry" | "carry" => BitIo::Carry,
+        "codec.tx_bit" | "codec_bit" => BitIo::CodecBit,
+        "pins.out0" | "pins.output0" | "io0" => BitIo::Io0,
+        "pins.out1" | "pins.output1" | "io1" => BitIo::Io1,
+        _ => return None,
+    })
+}
+
+fn canonical_bit_source(name: &str) -> Option<BitIo> {
+    Some(match name {
+        "status.carry" | "carry" => BitIo::Carry,
+        "codec.rx_bit" | "codec_rx" => BitIo::CodecBit,
+        "pins.in0" | "pins.input0" | "io0" => BitIo::Io0,
+        "pins.in1" | "pins.input1" | "io1" => BitIo::Io1,
+        _ => return None,
+    })
 }
 
 fn parse_register_bit(
@@ -1065,8 +1555,31 @@ fn builtin_symbols() -> HashMap<String, u16> {
     ] {
         symbols.insert(name.into(), value);
     }
+    for (name, value) in [
+        ("[PTR0]", 0x00),
+        ("[PTR1+]", 0x01),
+        ("[PTR1]", 0x01),
+        ("PCL", 0x02),
+        ("STATUS", 0x03),
+        ("PTR0", 0x04),
+        ("TIMER0.COUNT", 0x05),
+        ("TIMER0.CTRL", 0x06),
+        ("TIMER0.RELOAD", 0x07),
+        ("CODEC.PERIOD", 0x08),
+        ("PTR1", 0x09),
+        ("PINS.DIR", 0x0a),
+        ("PINS", 0x0b),
+        ("CODEC.CTRL", 0x0c),
+        ("SYS.CTRL", 0x1c),
+        ("CMD.OUT", 0x1d),
+        ("CMD.IN", 0x1e),
+        ("XCHG", 0x1f),
+    ] {
+        symbols.insert(name.into(), value);
+    }
     for index in 0..32 {
         symbols.insert(format!("SFR_DATA_REG{index}"), 0x20 + index as u16);
+        symbols.insert(format!("D{index}"), 0x20 + index as u16);
     }
     symbols
 }
@@ -1141,5 +1654,25 @@ mod tests {
         assert!(assemble_legacy("MOVL 0x100").is_err());
         assert!(assemble_legacy("CMPZ 0x80,0").is_err());
         assert!(assemble_legacy("BP1F 4,0").is_err());
+    }
+
+    #[test]
+    fn canonical_v2_names_aliases_and_bit_endpoints_encode_exactly() {
+        let source = r#"
+            .alias delay_count = d1
+            .const last_bit = 7
+            clr delay_count
+            mov pins.out1,xchg[last_bit]
+            mov xchg[0],pins.in1
+            mov c,pins.in1
+            xor c,pins.in0
+            mov a,[ptr1+]
+            skip set,[ptr1][7]
+        "#;
+        let program = assemble_canonical(source).unwrap();
+        assert_eq!(
+            program.words,
+            [0x0121, 0x00bf, 0x00f8, 0x001f, 0x001c, 0x0201, 0x5f01]
+        );
     }
 }
