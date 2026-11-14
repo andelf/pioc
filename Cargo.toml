@@ -7,7 +7,6 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/andelf/pioc"
-homepage = "https://github.com/andelf/pioc"
 rust-version = "1.81"
 keywords = ["wch", "pioc", "ch32", "assembler", "embedded"]
 categories = ["embedded", "hardware-support", "development-tools::build-utils"]

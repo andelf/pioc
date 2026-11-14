@@ -1,29 +1,45 @@
 # pioc
 
-Rust tooling for the WCH Programmable Protocol I/O Controller (PIOC/eMCU): an
-assembler, lossless disassembler, proc macros, cycle-aware VM, and
-WaveDrom/VCD waveform exporters.
+Rust tooling for the WCH Programmable Protocol I/O Controller (PIOC, also
+called the eMCU): an assembler, lossless disassembler, compile-time proc
+macros, a cycle-aware virtual machine, waveform exporters, and `no_std`
+protocol drivers that run on the chip itself.
 
 The implementation is based on the WCH PIOC manual, the vendor assembler and
-the five official EVT examples. The legacy assembler currently reproduces all
-five vendor `.BIN` files byte for byte. Canonical disassembly also round-trips
-those binaries without loss.
+the official EVT examples. The legacy assembler reproduces the vendor `.BIN`
+files byte for byte, and canonical disassembly round-trips them without loss.
+
+It is the firmware and tooling half of the
+[`ch32-hal`](https://github.com/ch32-rs/ch32-hal) PIOC support: `ch32-hal`
+provides the host-side register driver, this workspace provides the images it
+loads and the drivers that speak their command set.
 
 ## PIOC hardware
 
-The PIOC block appears in these WCH families, according to the
+The block appears in these WCH families, according to the
 [`ch32-data`](https://github.com/ch32-rs/ch32-data) peripheral database:
 
-| Family | Chips | PIOC peripheral |
-|---|---|---|
-| CH32X0 | CH32X033, CH32X034, CH32X035 | defined at `0x40026C00`; IO0/IO1 on PC18/PC19, IO0 remap on PC7 |
-| CH643 | CH643 | same X0-family block and pin mapping |
-| CH32V205 | CH32V205CCT6, CH32V205RCT6, CH32V205VCT6 | defined at `0x40025C00`; IO0/IO1 on PA11/PB10/PD3/PE3 and PA12/PB11/PD4/PE4 (AF4) |
-| CH32H4 | CH32H415, CH32H416, CH32H417 | PIOC clock/reset gates (`PIOCEN`/`PIOCRST`, bit 22) and the PIOC interrupt are defined; the register block itself is not yet in `ch32-data` |
+| Family | Chips | Register block | Program SRAM | IRQ |
+|---|---|---|---|---|
+| CH32X0 | CH32X033/034/035 | `0x4002_6C00`; IO0/IO1 on PC18/PC19, IO0 remap on PC7 | `0x2000_4000`, the top 4 KiB of the 20 KiB SRAM | 47 |
+| CH643 | CH643 | same block and pins as CH32X0 | `0x2000_4000` (inferred from X0, not yet checked against the vendor header) | 47 |
+| CH32V205 | CH32V205CCT6/RCT6/VCT6 | `0x4002_5C00`; IO0 on PA11/PB10/PD3/PE3, IO1 on PA12/PB11/PD4/PE4, all AF4 | `0x2000_0000`, the *low* 4 KiB, so the vendor linker moves `RAM` to `0x2000_1000` | 63 |
+| CH32H4 | CH32H415/416/417 | `0x4002_5C00`; IO0 on PB8/PC1/PE3/PF12, IO1 on PB9/PC0/PC2/PE4/PF13/PF14 | `0x5004_0000` | 122 |
 
-The instruction model and VM currently target the CH32X035 PIOC revision
-(`DecodeTarget::Ch32x035Pioc`). The other families expose the same style of
-block but have not been validated against this toolchain.
+The instruction model and VM target the CH32X035 revision of the core
+(`DecodeTarget::Ch32x035Pioc`). CH32X035 and CH32H417 are validated on
+hardware; CH32V205 has a different firmware ABI (below) and has not been
+exercised.
+
+Two firmware ABIs exist for the vendor 1-Wire/RGB example:
+
+| | CH32H417, CH32X035 | CH32V205 |
+|---|---|---|
+| RAM command | `0x80 \| bit_cycles` | `0x70` |
+| Payload offset | `0x400` | `0x600` |
+| Capacity | 3072 bytes | 2560 bytes |
+
+`pioc-programs` models the first one; the second is a planned addition.
 
 ## Workspace
 
@@ -31,10 +47,45 @@ block but have not been validated against this toolchain.
 |---|---|
 | `pioc-core` | `no_std` instruction, register, encoder and target-aware decoder model |
 | `pioc-parser` | WCH legacy and normalized canonical assembly syntax |
-| `pioc-proc` | `pioc_asm!`, `pioc_asm_canonical!` and `pioc_file!` compile-time assembly |
-| `pioc-vm` | CPU, SFR, host handshake, GPIO, Timer0, scenarios and waveforms |
-| `pioc-programs` | `no_std` Embassy-style WS2812/DS18x20 protocol APIs over a backend-neutral `CommandPort` |
+| `pioc-proc` | `pioc_asm!`, `pioc_asm_canonical!`, `pioc_file!` and `pioc_file_canonical!` compile-time assembly |
+| `pioc-vm` | CPU, SFR, host handshake, GPIO, Timer0, codec, scenarios and waveforms |
+| `pioc-programs` | `no_std` Embassy-style WS2812/DS18x20 drivers over a backend-neutral `CommandPort` |
 | `pioc` | command-line assembler, disassembler and VM runner |
+
+## Using it from firmware
+
+`pioc_file_canonical!` assembles checked-in firmware source into a
+`&'static [u16]` image at build time, and `Firmware` carries the assumptions
+baked into that image:
+
+```rust
+use pioc_programs::ws2812::{bit_cycles_for_hz, ColorOrder, Config, OutputPin, Storage, Ws2812};
+use pioc_programs::Firmware;
+
+const FIRMWARE: Firmware = Firmware {
+    words: pioc_proc::pioc_file_canonical!("firmware/rgb1w-100m.pio"),
+    // The SFR path's delay loops are `nop` padding, so the image is tied to
+    // the PIOC clock it was assembled for.
+    sfr_bit_cycles: 117,
+};
+
+// `pioc` is the HAL's host driver; it implements `CommandPort`.
+let bit_cycles = bit_cycles_for_hz(clocks().hclk.0).unwrap(); // 28/56/117 at 24/48/100 MHz
+let mut ws = Ws2812::new(pioc, FIRMWARE, Config {
+    output: OutputPin::Io0,
+    storage: Storage::Auto,
+    bit_cycles,
+});
+ws.write_rgb(&frame, ColorOrder::Grb).await?;
+```
+
+`Storage::Auto` uses the short SFR command when the frame fits 32 bytes, the
+image's timing matches the configured clock, and no payload has been written
+to program RAM yet. Writing one overwrites the tail of the image, so the driver
+stays on the RAM path afterwards and an explicit `Storage::Sfr` is rejected.
+
+Both examples in `ch32-hal` (`examples/ch32h417` and `examples/ch32x035`) use
+this path end to end.
 
 ## CLI
 
@@ -67,6 +118,11 @@ cargo run -p pioc -- run program.bin \
   --vcd waveform.vcd
 ```
 
+`translate` followed by `assemble --canonical` is how a vendor source becomes a
+checked-in firmware image: the round trip has to reproduce the vendor `.BIN`
+byte for byte, which is what makes a translated `.pio` reviewable rather than
+an opaque blob.
+
 `--max-steps` (default 100,000) caps executed instructions and `--max-cycles`
 (default 10,000,000) caps simulated PIOC clocks.
 
@@ -95,27 +151,25 @@ events for later input transitions.
 The WaveJSON output can be pasted into WaveDrom. VCD can be opened by GTKWave
 or another waveform viewer. `--wave-start`, `--wave-end` and `--wave-quantum`
 select the displayed cycle window and sampling density; the default is two
-PIOC cycles per WaveDrom slot. `--clock-hz` defaults
-to the standard 48 MHz PIOC clock and controls both WaveDrom duration marks and
-VCD timestamps. WaveDrom marks show each interval as `cycles / physical time`;
-its footer records the physical duration represented by one displayed slot.
+PIOC cycles per WaveDrom slot. `--clock-hz` defaults to the standard 48 MHz
+PIOC clock and controls both WaveDrom duration marks and VCD timestamps.
 
 ## Syntax and ISA
 
 The parser accepts the vendor `INCLUDE`, `EQU`, `ORG`, `DW`, `DB` and `END`
 directives and aliases used by the EVT sources. Canonical syntax deliberately
 has a small core: familiar operations such as `mov`, `add`, `jmp`, `bset` and
-`skip`, plus semantic register names such as `timer0.ctrl`, `pins.dir`, `cmd.in`,
-`ptr0` and `d0`. `.alias` and `.const` are optional conveniences; rare forms
-such as `mov.lit` are lossless-encoding escapes, not concepts required for
-normal programs.
+`skip`, plus semantic register names such as `timer0.ctrl`, `pins.dir`,
+`cmd.in`, `ptr0` and `d0`. `.alias` and `.const` are optional conveniences;
+rare forms such as `mov.lit` are lossless-encoding escapes, not concepts
+required for normal programs.
 
-The five translated EVT programs under [`examples/canonical`](examples/canonical)
-are assembled in tests and must reproduce the vendor BIN files byte for byte.
+The translated EVT programs under [`examples/canonical`](examples/canonical) are
+assembled in tests and must reproduce the vendor BIN files byte for byte.
 
 See [docs/isa.md](docs/isa.md) for the complete instruction map and canonical
 syntax, and [docs/registers.md](docs/registers.md) for every SFR and bitfield.
-The detailed high-level driver design and Embassy comparison are in
+The high-level driver design and the Embassy comparison are in
 [docs/programs-api-design.md](docs/programs-api-design.md).
 
 ## VM scope
@@ -125,6 +179,10 @@ indirect registers, host command handshake, GPIO edge waits, digital `0/1/Z/X`
 resolution with pull-ups, Timer0 divider/reload/PWM output, PWM/Manchester codec
 TX and normal-waveform RX, WAIT timeout reset, scheduled host/pin events, trace
 JSONL, WaveJSON and VCD.
+
+A host backend can also write program RAM (`Machine::write_program_ram`), which
+is what a protocol driver does with a payload, and step firmware that waits on
+a codec edge with `Machine::step_or_idle`.
 
 Architectural boundary: the PIOC manual says program-space `WRCODE` is not
 supported, and its generic `EXEC` opcode range is redefined as `BCTC` on the
@@ -143,8 +201,26 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The integration tests locate the sibling WCH EVT tree when available and check
-all official ASM/BIN pairs as golden files.
+Two layers of tests:
+
+- The EVT golden files are checked whenever the sibling vendor tree is present,
+  comparing every official ASM/BIN pair.
+- The canonical tests need no vendor tree. They assemble the checked-in
+  `rgb1w.pio` and run it in the VM, asserting the SFR waveform for one LED, the
+  program-RAM payload and waveform for twelve, the sticky-RAM rule across
+  alternating frame lengths, the IO1 pin claim and command collision, and an
+  interrupt that was already pending before the wait. Status-code mapping and
+  the SFR/RAM selection rules are covered against a recording mock port.
+
+## Status
+
+Working: the toolchain, the VM, and the CH32H417 / CH32X035 path through
+`ch32-hal`.
+
+Not implemented: the CH32V205 firmware ABI (`0x70` command, `0x600` payload,
+low 4 KiB program SRAM), streaming protocols that need more than one pending
+event, and a `Loaded` typestate. CH643's program-SRAM base is inferred from
+CH32X0.
 
 ## Sources
 
