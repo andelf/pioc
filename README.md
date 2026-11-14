@@ -1,13 +1,29 @@
 # pioc
 
-Rust tooling for the WCH CH32X035/CH643 Programmable Protocol I/O Controller
-(PIOC/eMCU): an assembler, lossless disassembler, proc macros, cycle-aware VM,
-and WaveDrom/VCD waveform exporters.
+Rust tooling for the WCH Programmable Protocol I/O Controller (PIOC/eMCU): an
+assembler, lossless disassembler, proc macros, cycle-aware VM, and
+WaveDrom/VCD waveform exporters.
 
 The implementation is based on the WCH PIOC manual, the vendor assembler and
 the five official EVT examples. The legacy assembler currently reproduces all
 five vendor `.BIN` files byte for byte. Canonical disassembly also round-trips
 those binaries without loss.
+
+## PIOC hardware
+
+The PIOC block appears in these WCH families, according to the
+[`ch32-data`](https://github.com/ch32-rs/ch32-data) peripheral database:
+
+| Family | Chips | PIOC peripheral |
+|---|---|---|
+| CH32X0 | CH32X033, CH32X034, CH32X035 | defined at `0x40026C00`; IO0/IO1 on PC18/PC19, IO0 remap on PC7 |
+| CH643 | CH643 | same X0-family block and pin mapping |
+| CH32V205 | CH32V205CCT6, CH32V205RCT6, CH32V205VCT6 | defined at `0x40025C00`; IO0/IO1 on PA11/PB10/PD3/PE3 and PA12/PB11/PD4/PE4 (AF4) |
+| CH32H4 | CH32H415, CH32H416, CH32H417 | PIOC clock/reset gates (`PIOCEN`/`PIOCRST`, bit 22) and the PIOC interrupt are defined; the register block itself is not yet in `ch32-data` |
+
+The instruction model and VM currently target the CH32X035 PIOC revision
+(`DecodeTarget::Ch32x035Pioc`). The other families expose the same style of
+block but have not been validated against this toolchain.
 
 ## Workspace
 
