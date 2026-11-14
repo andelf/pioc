@@ -1,146 +1,167 @@
-# Embassy 风格 `pioc-programs` 高层协议 API：对比、设计与可行性验证
+# Embassy-style `pioc-programs` high-level protocol API: comparison, design, and feasibility
 
-> 状态：设计已形成可编译原型。当前原型实现 `CommandPort`、WS2812/RGB
-> 和官方 RGB1W 固件提供的 DS18x20 操作，并用官方 `RGB1W.BIN` 完成一次
-> WS2812 单灯端到端 VM 验证。UART、I²C、通用 OneWire 和真实 CH32X035
-> 硬件 backend 属于后续阶段。
+> Status: the design has a compilable prototype. The prototype implements
+> `CommandPort`, WS2812/RGB, and the DS18x20 operations provided by the official
+> RGB1W firmware, and performs one end-to-end VM check of a single WS2812 LED
+> against the official `RGB1W.BIN`. UART, I²C, generic OneWire, and a real
+> CH32X035 hardware backend belong to later phases.
 
-## 1. 结论
+## 1. Conclusion
 
-Embassy RP PIO 最值得借鉴的不是 RP2040 的 FIFO、side-set 或多状态机本身，
-而是以下软件结构：
+The most valuable thing to borrow from Embassy RP PIO is not RP2040's FIFO,
+side-set, or multiple state machines themselves, but the following software
+structure:
 
-1. 把“程序映像”和“使用该程序的协议驱动”分离；
-2. 驱动独占状态机、pin、DMA 等资源，Rust 所有权防止并发误用；
-3. 同时提供原始低层入口和 `write_slice`、`transfer`、`reset` 等协议 API；
-4. 阻塞、异步 FIFO、DMA 和 IRQ 共享同一份协议语义；
-5. 程序 ABI、pin、时钟、缓冲区布局由驱动封装，而不是暴露给应用。
+1. separate the "program image" from the protocol driver that uses it;
+2. the driver exclusively owns the state machine, pins, DMA, and other
+   resources, and Rust ownership prevents concurrent misuse;
+3. provide both raw low-level entry points and protocol APIs such as
+   `write_slice`, `transfer`, and `reset`;
+4. blocking, asynchronous FIFO, DMA, and IRQ share one set of protocol
+   semantics;
+5. the program ABI, pins, clock, and buffer layout are encapsulated by the
+   driver instead of being exposed to the application.
 
-WCH PIOC 可以采用同样分层，但不能复制 RP PIO 的具体运行模型。PIOC 是一个
-8-bit 可编程核心，使用 `cmd.in/cmd.out`、32-byte 共享 SFR 和共享程序 SRAM；
-它没有四个独立状态机和通用 TX/RX FIFO。因此建议把主抽象定义为
-`CommandPort`/`EventPort`，而不是伪造 RP 风格的 FIFO。
+WCH PIOC can adopt the same layering, but it must not copy RP PIO's concrete
+execution model. PIOC is an 8-bit programmable core that uses `cmd.in`/`cmd.out`,
+32 bytes of shared SFRs, and shared program SRAM; it has no four independent
+state machines and no general TX/RX FIFO. The main abstraction should therefore
+be `CommandPort`/`EventPort`, not an imitation of an RP-style FIFO.
 
-当前验证说明以下设计可行：
+The current validation shows that the following design is feasible:
 
-- 协议 crate 可以保持 `no_std`、无堆分配和 executor 无关；
-- 同一个高层 `Ws2812` 驱动可以由硬件 backend 或 VM backend 承载；
-- 短 SFR 与长 RAM 两条固件路径可以由 API 自动选择；
-- 固件命令冲突、容量和状态码可以在类型化错误中显式报告；
-- 异步边界放在“等待 PIOC IRQ”处，符合官方中断式 UART/I²C 示例。
+- the protocol crate can stay `no_std`, allocation-free, and
+  executor-agnostic;
+- the same high-level `Ws2812` driver can run on a hardware backend or a VM
+  backend;
+- the API can automatically choose between the short SFR and long RAM firmware
+  paths;
+- firmware command collisions, capacity limits, and status codes can be
+  reported explicitly as typed errors;
+- the async boundary sits at "wait for the PIOC IRQ", matching the official
+  interrupt-driven UART/I²C examples.
 
-## 2. 调研依据
+## 2. Research basis
 
 ### 2.1 Embassy RP PIO
 
-| 主题 | 参考实现 |
+| Topic | Reference implementation |
 |---|---|
-| 内联汇编与多状态机异步任务 | `examples/rp/src/bin/pio_async.rs` |
+| Inline assembly and multi-state-machine async tasks | `examples/rp/src/bin/pio_async.rs` |
 | TX/RX DMA | `examples/rp/src/bin/pio_dma.rs` |
-| 阻塞与异步 SPI | `pio_spi.rs`、`pio_spi_async.rs` |
-| WS2812 程序对象、DMA 与颜色顺序 | `embassy-rp/src/pio_programs/ws2812.rs` |
-| OneWire reset/read/write/search/强上拉 | `embassy-rp/src/pio_programs/onewire.rs` |
-| UART TX/RX 分离及 `embedded-io-async` | `embassy-rp/src/pio_programs/uart.rs` |
+| Blocking and async SPI | `pio_spi.rs`, `pio_spi_async.rs` |
+| WS2812 program object, DMA, and color order | `embassy-rp/src/pio_programs/ws2812.rs` |
+| OneWire reset/read/write/search/strong pull-up | `embassy-rp/src/pio_programs/onewire.rs` |
+| UART TX/RX split and `embedded-io-async` | `embassy-rp/src/pio_programs/uart.rs` |
 | IRQ future/flag | `tests/rp/src/bin/pio_irq.rs` |
-| 程序自动重定位和空间管理 | `tests/rp/src/bin/pio_multi_load.rs` |
+| Automatic program relocation and space management | `tests/rp/src/bin/pio_multi_load.rs` |
 
-Embassy 中可见三种程序组织方式：
+Embassy shows three ways of organizing programs:
 
-- `pio_asm!` 内联汇编；
-- `pio::Assembler` 类型化 builder；
-- `PioXxxProgram + PioXxx` 可复用协议驱动。
+- `pio_asm!` inline assembly;
+- the `pio::Assembler` typed builder;
+- `PioXxxProgram + PioXxx` reusable protocol drivers.
 
-当前 Embassy tree 没有发现使用外部 `.pio` 文件或 `pio_file!` 的 RP 示例。
+The current Embassy tree contains no RP example that uses external `.pio` files
+or `pio_file!`.
 
 ### 2.2 WCH PIOC
 
-主要依据：
+Main sources:
 
-- `PIOC-EN.pdf`、`CHRISC8B-EN.pdf`；
-- 官方 `RGB1W.ASM/BIN`；
-- `RGB1W.c/.h` 主机代码；
-- 官方 UART 与 I²C 主机中断/双缓冲代码；
-- 当前仓库的 assembler、VM、SFR 文档和端到端 trace。
+- `PIOC-EN.pdf`, `CHRISC8B-EN.pdf`;
+- the official `RGB1W.ASM`/`BIN`;
+- the `RGB1W.c`/`.h` host code;
+- the official UART and I²C host interrupt/double-buffer code;
+- this repository's assembler, VM, SFR documentation, and end-to-end traces.
 
-官方 RGB1W 主机代码已经展示两种数据路径：
+The official RGB1W host code already demonstrates two data paths:
 
-| 模式 | 容量 | 装载条件 | 启动方式 |
+| Mode | Capacity | Load condition | Start method |
 |---|---:|---|---|
-| SFR short | 1..32 byte | PIOC 运行时写 `d0..d31` | `cmd.in = length` 或 `length|0x40` |
-| program-RAM long | 1..3072 byte | PIOC reset/停钟时写 SRAM `0x400..0xFFF` | `cmd.in = 0x80|bit_cycles` |
+| SFR short | 1..32 bytes | PIOC running; write `d0..d31` | `cmd.in = length` or `length\|0x40` |
+| program-RAM long | 1..3072 bytes | PIOC reset/clock-stopped; write SRAM `0x400..0xFFF` | `cmd.in = 0x80\|bit_cycles` |
 
-官方 UART 和 I²C 示例进一步证明：
+The official UART and I²C examples further show that:
 
-- IRQ 不只表示最终 completion，也可以表示“请主机补下一块 buffer”；
-- UART 使用两个 8-byte SFR buffer 交替 refill；
-- I²C 使用多组 8-byte buffer 处理 controller/target 方向；
-- backend 必须支持重复等待 IRQ，而不能把每个 IRQ 都硬编码为最终完成。
+- an IRQ does not only mean final completion; it can also mean "host, please
+  refill the next buffer";
+- UART alternates between two 8-byte SFR buffers;
+- I²C uses multiple 8-byte buffers for controller/target directions;
+- the backend must support waiting for IRQs repeatedly and must not hard-code
+  every IRQ as final completion.
 
-## 3. RP PIO 与 WCH PIOC 的关键差异
+## 3. Key differences between RP PIO and WCH PIOC
 
-| 能力 | RP PIO / Embassy | WCH PIOC | API 影响 |
+| Capability | RP PIO / Embassy | WCH PIOC | API impact |
 |---|---|---|---|
-| 执行单元 | 每个 block 多个 state machine | 单个 RISC8B/PIOC core | 驱动默认独占整个 PIOC |
-| 程序空间 | 32 word，共享、可重定位 | 2048 word 完整映像 | 不需要通用片段重定位 |
-| 数据通道 | TX/RX FIFO，可 DMA pacing | `cmd.*`、`xchg`、`d0..d31`、共享 SRAM | 使用命令/事件 backend |
-| pin 映射 | 每个 SM 可配置 IN/OUT/SET/side-set | IO0/IO1 及芯片 pin remap | pin 是固件 ABI 的一部分 |
-| 时钟 | 每个 SM 独立 divider | PIOC 随系统时钟，固件延时依赖频率 | Program profile 必须记录时钟 |
-| IRQ | 多个 PIO IRQ flag | PIOC 请求主机 IRQ | backend 统一为异步事件 |
-| 并发 | 多 SM 可同时工作 | 一个 core 一次运行一个固件 | 不提供虚假的多驱动并发 |
-| 数据流 | FIFO stream 自然 | 固件自定义双缓冲/握手 | streaming 必须按固件 ABI 建模 |
+| Execution units | multiple state machines per block | one RISC8B/PIOC core | the driver owns the whole PIOC by default |
+| Program space | 32 words, shared and relocatable | 2048-word full image | no generic fragment relocation needed |
+| Data channels | TX/RX FIFO, DMA pacing | `cmd.*`, `xchg`, `d0..d31`, shared SRAM | use a command/event backend |
+| Pin mapping | per-SM IN/OUT/SET/side-set configuration | IO0/IO1 plus chip pin remap | pins are part of the firmware ABI |
+| Clock | per-SM divider | PIOC follows the system clock; firmware delays depend on frequency | the program profile must record the clock |
+| IRQ | multiple PIO IRQ flags | PIOC requests a host IRQ | the backend normalizes them into async events |
+| Concurrency | multiple SMs run in parallel | one core runs one firmware image at a time | no fake multi-driver concurrency |
+| Data flow | FIFO streams are natural | firmware-defined double buffering/handshake | streaming must model the firmware ABI |
 
-## 4. 目标与非目标
+## 4. Goals and non-goals
 
-### 4.1 目标
+### 4.1 Goals
 
-- `no_std`，默认不依赖 allocator；
-- executor 无关，可适配 Embassy、轮询 HAL 和 VM；
-- 硬件/VM 复用同一协议驱动；
-- 用 Rust 所有权串行化对 PIOC 的访问；
-- 隐藏地址、命令号、buffer 布局和中断确认细节；
-- 支持短命令、长 payload 和 IRQ streaming；
-- 明确固件 ABI 版本、时钟 profile、pin 和 RAM 需求；
-- 错误中保留 backend 错误和 PIOC 固件 status；
-- 测试可以检查命令序列，也可以运行真实官方 BIN。
+- `no_std`, with no allocator dependency by default;
+- executor-agnostic, so it can serve Embassy, polling HALs, and the VM;
+- hardware and VM reuse the same protocol drivers;
+- Rust ownership serializes access to the PIOC;
+- hide addresses, command numbers, buffer layout, and interrupt-acknowledgment
+  details;
+- support short commands, long payloads, and IRQ streaming;
+- state the firmware ABI version, clock profile, pin, and RAM requirements
+  explicitly;
+- preserve backend errors and PIOC firmware status in errors;
+- tests can check the command sequence and can also run real official BIN
+  images.
 
-### 4.2 非目标
+### 4.2 Non-goals
 
-- 不把 WCH PIOC 假装成 RP PIO；
-- 不承诺一个固件映像同时运行多个互不相关协议；
-- 不在协议 crate 内绑定具体 NVIC/executor；
-- 不把外部设备模型放入硬件 HAL；
-- 不将未经许可确认的 WCH 二进制直接打包进可再分发 crate；
-- 不把 VM 的数字结果描述成硅片级电气验证。
+- do not pretend that WCH PIOC is RP PIO;
+- do not promise that one firmware image runs multiple unrelated protocols
+  concurrently;
+- do not bind a concrete NVIC/executor inside the protocol crate;
+- do not put external-device models into the hardware HAL;
+- do not package WCH binaries whose license has not been confirmed into a
+  redistributable crate;
+- do not describe VM digital results as silicon-level electrical validation.
 
-## 5. 建议的 crate 分层
+## 5. Proposed crate layering
 
 ```text
 pioc-core
-  Instruction / Register / ProgramImage 基础类型
+  Instruction / Register base types (the program-image type is Program in
+  pioc-parser)
 
 pioc-parser + pioc-proc
-  汇编、反汇编、编译期程序生成
+  assembly, disassembly, compile-time program generation
 
-pioc-hal-ch32x035                 （建议新增）
-  寄存器、SRAM 装载、reset/run、IRQ future、pin remap
+pioc-hal-ch32x035                 (proposed)
+  registers, SRAM loading, reset/run, IRQ future, pin remap
 
-pioc-programs                    （原型已新增）
+pioc-programs                    (prototype added)
   backend-neutral protocol API
   ws2812 / ds18x20 / uart / i2c / nec / onewire-v2
 
 pioc-vm
-  指令、SFR、GPIO、Timer、codec、trace
+  instructions, SFR, GPIO, Timer, codec, trace
 
-pioc-vm-adapter                  （可并入 pioc-programs feature）
+pioc-vm-adapter                  (can be folded into a pioc-programs feature)
   CommandPort/EventPort for Machine
 ```
 
-应用层只依赖 `pioc-programs` 和一个 backend，不需要知道 `d7` 或 `0x33` 的
-具体含义。
+The application layer depends only on `pioc-programs` and one backend; it does
+not need to know what `d7` or `0x33` means.
 
-## 6. 已实现的最小 backend 契约
+## 6. Implemented minimal backend contract
 
-原型位于 `pioc/pioc-programs/src/lib.rs`：
+The prototype is in `pioc-programs/src/lib.rs`:
 
 ```rust
 pub trait CommandPort {
@@ -166,25 +187,28 @@ pub trait CommandPort {
 }
 ```
 
-### 6.1 为什么不是 FIFO trait
+### 6.1 Why not a FIFO trait
 
-`wait_for_interrupt()` 对命令型固件表示 completion；对 UART/I²C streaming
-固件则可以重复调用，每次返回后由协议驱动检查数据区 flag、refill buffer 或取出
-RX 数据。这样不会把 `cmd.out` 错误抽象成 RP TX/RX FIFO。
+For command-style firmware, `wait_for_interrupt()` means completion. For
+UART/I²C streaming firmware it can be called repeatedly, and after each return
+the protocol driver checks data-area flags, refills a buffer, or takes RX data.
+This avoids incorrectly abstracting `cmd.out` as an RP TX/RX FIFO.
 
-### 6.2 为什么返回 `impl Future`
+### 6.2 Why return `impl Future`
 
-- 不需要 `async-trait` 或 heap allocation；
-- 可以保持 `no_std`；
-- 硬件 backend 返回 IRQ future；
-- VM backend 可以返回“运行到 IRQ”的 future；
-- 静态分发，符合嵌入式资源所有权模型。
+- no `async-trait` or heap allocation is needed;
+- `no_std` is preserved;
+- the hardware backend returns an IRQ future;
+- the VM backend can return a "run until IRQ" future;
+- dispatch is static, matching embedded resource-ownership models.
 
-该 trait 不是 object-safe，这是有意选择。PIOC 驱动通常在编译期知道 backend 类型。
+The trait is not object-safe; that is intentional. PIOC drivers usually know
+the backend type at compile time.
 
-### 6.3 后续应拆出的更低层接口
+### 6.3 Lower-level interfaces to split out later
 
-为了正确表达所有固件，建议第二阶段拆分为：
+To express all firmware correctly, the second phase should split the contract
+into:
 
 ```rust
 trait PiocControl {
@@ -210,13 +234,15 @@ trait PiocEvents {
 }
 ```
 
-当前 `CommandPort` 是经过验证的 MVP，拆分后可以完整支持 UART/I²C 的中间 IRQ，
-并把“读 cmd.out 自动清 IRQ”和“伪写 cmd.out 清 IRQ”的芯片细节留给 backend。
+The current `CommandPort` is a proven MVP. After the split it can fully support
+the intermediate IRQs of UART/I²C and leave chip details such as "reading
+`cmd.out` clears the IRQ automatically" and "a spurious `cmd.out` write clears
+the IRQ" to the backend.
 
-## 7. 程序与 ABI 类型
+## 7. Program and ABI types
 
-Embassy 使用 `PioWs2812Program` 表示已经装入指令 RAM 的程序。PIOC 对应物不应
-只有裸 `&[u8]`，建议定义：
+Embassy uses `PioWs2812Program` for a program already loaded into instruction
+RAM. The PIOC counterpart should not be a bare `&[u8]`. Proposed:
 
 ```rust
 pub trait ProgramSpec {
@@ -240,7 +266,7 @@ pub struct Loaded<B, P> {
 }
 ```
 
-期望用法：
+Expected usage:
 
 ```rust
 let pioc = PiocManager::new(peripheral, irq);
@@ -248,14 +274,16 @@ let loaded = pioc.load(Rgb1wProgram::new(RGB1W_BIN)).await?;
 let mut leds = Ws2812::new(loaded, config);
 ```
 
-`Loaded<B, Rgb1wProgram>` 的类型可以防止把 UART driver 绑定到 RGB1W 映像。
+The `Loaded<B, Rgb1wProgram>` type prevents binding a UART driver to an RGB1W
+image.
 
-当前原型为了先验证协议层，构造器暂时假设调用者已经装载正确固件。正式硬件 API
-应引入上述 typestate。
+To validate the protocol layer first, the prototype constructor currently
+assumes the caller has already loaded the correct firmware. A production
+hardware API should introduce the typestate above.
 
-## 8. 错误模型
+## 8. Error model
 
-原型已经实现：
+The prototype already implements:
 
 ```rust
 pub enum Error<E> {
@@ -269,30 +297,30 @@ pub enum Error<E> {
 }
 ```
 
-官方 RGB1W status 被映射为：
+The official RGB1W status values map to:
 
-| status | 类型化错误 |
+| status | Typed error |
 |---:|---|
 | `0` | success |
 | `1` | `UnknownCommand` |
 | `2` | `InvalidParameter` |
 | `4` | `OutputHigh` |
 | `6` | `InputHigh` |
-| 其他 | `Other(code)` |
+| other | `Other(code)` |
 
-正式版还应增加：
+A production version should also add:
 
-- `Busy`；
-- `Timeout`；
-- `WrongProgramAbi`；
-- `UnsupportedClock`；
-- `PinUnavailable`；
-- `CancelledNeedsRecovery`；
-- streaming 的 overrun/underrun、parity/framing/NACK/arbitration 错误。
+- `Busy`;
+- `Timeout`;
+- `WrongProgramAbi`;
+- `UnsupportedClock`;
+- `PinUnavailable`;
+- `CancelledNeedsRecovery`;
+- overrun/underrun and parity/framing/NACK/arbitration errors for streaming.
 
 ## 9. WS2812 API
 
-### 9.1 当前 API
+### 9.1 Current API
 
 ```rust
 let config = ws2812::Config {
@@ -309,38 +337,41 @@ leds.write_rgb(
 ).await?;
 ```
 
-也可直接发送预编码 byte stream：
+It can also send a pre-encoded byte stream directly:
 
 ```rust
 leds.write_raw(&[0x00, 0xff, 0x00]).await?;
 ```
 
-支持六种 RGB 排列：`RGB/RBG/GRB/GBR/BRG/BGR`。固件本身发送任意 byte，
-因此 RGBW 或自定义灯珠可先用 `write_raw`，正式版再增加 `Rgbw8` 和颜色顺序 trait。
+Six RGB orders are supported: `RGB/RBG/GRB/GBR/BRG/BGR`. The firmware itself
+sends arbitrary bytes, so RGBW or custom LEDs can start with `write_raw`, and a
+production version can add `Rgbw8` and a color-order trait later.
 
-### 9.2 自动选择存储路径
+### 9.2 Automatic storage-path selection
 
-`Storage::Auto` 使用以下规则：
+`Storage::Auto` uses these rules:
 
-1. payload 为空：报错；
-2. 1..32 byte 且短命令无冲突：使用 SFR；
-3. 其他长度：使用 program RAM；
-4. RAM backend 不可用：`ProgramRamUnavailable`；
-5. 超过 backend 容量或官方 3072-byte 上限：`PayloadTooLong`。
+1. empty payload: error;
+2. 1..32 bytes and no short-command collision: use SFR;
+3. any other length: use program RAM;
+4. RAM backend unavailable: `ProgramRamUnavailable`;
+5. above the backend capacity or the official 3072-byte limit:
+   `PayloadTooLong`.
 
-实现不需要 heap：`write_rgb(&[Rgb8])` 逐像素打包为局部 `[u8; 3]`，然后写 SFR
-或停钟状态下的 program RAM。
+The implementation needs no heap: `write_rgb(&[Rgb8])` packs each pixel into a
+local `[u8; 3]` and then writes the SFRs or program RAM while the clock is
+stopped.
 
-### 9.3 IO1 的命令冲突
+### 9.3 IO1 command collision
 
-官方 short 模式用：
+The official short mode uses:
 
 ```text
 IO0 command = length
 IO1 command = 0x40 | length
 ```
 
-而同一固件先解释：
+while the same firmware first interprets:
 
 ```text
 0x41 = DS1W convert
@@ -348,34 +379,38 @@ IO1 command = 0x40 | length
 0x43 = DS1W convert + read
 ```
 
-因此 IO1 发送 1、2、3 byte 会碰撞。一个 RGB 灯正好是 3 byte，`0x43` 会误入
-温度转换路径。原型行为：
+Sending 1, 2, or 3 bytes on IO1 therefore collides. One RGB LED is exactly
+3 bytes, and `0x43` would wrongly enter the temperature-conversion path.
+Prototype behavior:
 
-- `Storage::Auto`：自动改用 RAM mode；
-- `Storage::Sfr`：返回 `SfrCommandCollision`；
-- 绝不静默发送错误命令。
+- `Storage::Auto`: switch to RAM mode automatically;
+- `Storage::Sfr`: return `SfrCommandCollision`;
+- never silently send a wrong command.
 
-这是高层 API 比官方 C 包装更安全的直接例子。
+This is a direct example of the high-level API being safer than the official C
+wrapper.
 
-### 9.4 时钟
+### 9.4 Clock
 
-短模式的软件延时依赖固件映像中的 frequency patch；长模式命令低 7 位直接传
-`bit_cycles`。官方值：
+Short-mode software delays depend on a frequency patch in the firmware image;
+in long mode the low 7 bits of the command carry `bit_cycles` directly.
+Official values:
 
 | PIOC/system clock | bit cycles |
 |---:|---:|
 | 48 MHz | 56 |
 | 24 MHz | 28 |
 
-正式 `ProgramSpec` 应在 load 阶段应用短模式 patch，并根据实际时钟计算/验证
-long-mode bit cycles。当前原型要求用户正确配置 `bit_cycles`，并限制到固件接受的
-`8..=124`。
+A production `ProgramSpec` should apply the short-mode patch at load time and
+compute/validate long-mode bit cycles from the actual clock. The current
+prototype requires the user to configure `bit_cycles` correctly and limits it
+to the firmware-accepted `8..=124`.
 
-## 10. OneWire 与 DS18x20
+## 10. OneWire and DS18x20
 
-### 10.1 不能直接复制 Embassy `PioOneWire`
+### 10.1 Embassy `PioOneWire` cannot be copied directly
 
-Embassy RP 实现提供：
+The Embassy RP implementation provides:
 
 ```text
 reset
@@ -385,7 +420,7 @@ write_bytes_pullup
 ROM search
 ```
 
-官方 WCH RGB1W 固件只导出：
+The official WCH RGB1W firmware only exports:
 
 ```text
 0x41 convert
@@ -393,22 +428,23 @@ ROM search
 0x43 convert, wait 750 ms, read
 ```
 
-内部固件确实有 reset/read/write 子程序，但没有通过 host ABI 暴露。因此当前
-`pioc-programs` 正确命名为 `Ds18x20`，而不是声称实现通用 `OneWireBus`。
+The internal firmware does have reset/read/write subroutines, but they are not
+exposed through the host ABI. `pioc-programs` is therefore correctly named
+`Ds18x20` rather than claiming to implement a generic `OneWireBus`.
 
-### 10.2 当前 DS18x20 API
+### 10.2 Current DS18x20 API
 
 ```rust
 let mut sensor = Ds18x20::new(port);
 
 sensor.start_conversion(PowerMode::Parasite).await?;
-// 主机等待传感器转换时间
+// The host waits for the sensor conversion time.
 let temperature = sensor.read_temperature().await?;
 
 let milli_c = temperature.milli_celsius();
 ```
 
-也支持固件内部阻塞 750 ms 的命令：
+The firmware's internal blocking 750 ms command is also supported:
 
 ```rust
 let temperature = sensor
@@ -416,12 +452,12 @@ let temperature = sensor
     .await?;
 ```
 
-`PowerMode::Parasite` 映射到 `sys.ctrl.host_config`，固件在发送 `44h` 后主动推高
-IO0 提供强上拉。
+`PowerMode::Parasite` maps to `sys.ctrl.host_config`; after sending `44h` the
+firmware actively drives IO0 high to provide the strong pull-up.
 
-### 10.3 通用 OneWire V2 固件建议
+### 10.3 Proposed generic OneWire V2 firmware
 
-若要获得 Embassy 同等级能力，需要定义新 PIOC firmware ABI：
+Reaching Embassy-level capability requires a new PIOC firmware ABI:
 
 ```text
 01h RESET                  -> presence/status
@@ -433,7 +469,7 @@ IO0 提供强上拉。
 07h TOUCH_BITS             simultaneous write/read slots
 ```
 
-对应 API：
+The corresponding API:
 
 ```rust
 trait OneWireBus {
@@ -444,21 +480,22 @@ trait OneWireBus {
 }
 ```
 
-ROM search 应放在 Rust 协议层，PIOC 只执行精确定时的 triplet；这比把完整 search
-状态机塞入 PIOC 更容易测试，也允许多个传感器。
+ROM search should live in the Rust protocol layer, with PIOC executing only
+precisely timed triplets. This is easier to test than embedding the full search
+state machine in PIOC, and it allows multiple sensors.
 
-## 11. UART 与 I²C streaming API
+## 11. UART and I²C streaming API
 
 ### 11.1 UART
 
-官方 UART 使用两组 8-byte TX buffer 交替 refill，IRQ 可能表示：
+The official UART alternates between two 8-byte TX buffers; an IRQ may mean:
 
-- RX byte ready；
-- TX buffer A 可补充；
-- TX buffer B 可补充；
-- 发送完成或错误。
+- an RX byte is ready;
+- TX buffer A can be refilled;
+- TX buffer B can be refilled;
+- transmission is complete or failed.
 
-建议 API：
+Proposed API:
 
 ```rust
 pub struct PiocUart<B> { /* owns backend and buffer state */ }
@@ -472,13 +509,14 @@ impl embedded_io_async::Write for UartTx<_> { ... }
 impl embedded_io_async::Read for UartRx<_> { ... }
 ```
 
-需要注意：单个 PIOC backend 无法像 RP 的两个 state machine 那样被两个所有者直接
-拆开。实现应使用共享内部状态和唯一 IRQ dispatcher，或者在一个 `run()` task 中
-维护 TX/RX ring buffers，再向应用暴露 pipe/channel handle。
+Note that a single PIOC backend cannot be divided directly between two owners
+the way RP's two state machines can. The implementation should use shared
+internal state with a single IRQ dispatcher, or maintain TX/RX ring buffers
+inside one `run()` task and expose pipe/channel handles to the application.
 
 ### 11.2 I²C
 
-建议分别实现 controller 与 target：
+Implement the controller and target separately:
 
 ```rust
 PiocI2cController<B>
@@ -490,14 +528,14 @@ PiocI2cTarget<B>
     run(handler).await
 ```
 
-controller 可实现 `embedded-hal-async::i2c::I2c`。target 需要持续 IRQ service，不能
-建模成单次 `command().await`。
+The controller can implement `embedded-hal-async::i2c::I2c`. The target needs
+continuous IRQ service and cannot be modeled as a one-shot `command().await`.
 
-## 12. 所有权、并发与取消
+## 12. Ownership, concurrency, and cancellation
 
-### 12.1 独占所有权
+### 12.1 Exclusive ownership
 
-协议 driver 持有 backend：
+The protocol driver owns the backend:
 
 ```rust
 pub struct Ws2812<B> {
@@ -506,15 +544,17 @@ pub struct Ws2812<B> {
 }
 ```
 
-所有方法使用 `&mut self`，因此编译器阻止两个命令同时修改同一 PIOC。`release()`
-归还 backend，允许应用显式切换固件/协议。
+All methods take `&mut self`, so the compiler prevents two commands from
+modifying the same PIOC at the same time. `release()` returns the backend,
+allowing the application to switch firmware/protocol explicitly.
 
-### 12.2 取消安全
+### 12.2 Cancellation safety
 
-`write_rgb().await` 在 `cmd.in` 写入后若 future 被取消，PIOC 仍会继续运行。这与
-DMA/FIFO 驱动类似，不能声称 cancellation-safe。
+If the future of `write_rgb().await` is dropped after `cmd.in` has been written,
+PIOC keeps running. This is similar to DMA/FIFO drivers, and the API must not
+claim cancellation safety.
 
-正式版应提供：
+A production version should provide:
 
 ```rust
 driver.is_busy();
@@ -523,20 +563,22 @@ driver.abort().await;       // reset/halt and restore known state
 driver.recover().await;     // reload/restart firmware when required
 ```
 
-文档必须标注：丢弃操作 future 不等于取消硬件事务。
+The documentation must state that dropping an operation future does not cancel
+the hardware transaction.
 
-### 12.3 超时
+### 12.3 Timeouts
 
-协议 crate 不应绑定 `embassy_time::Duration`。两种方案：
+The protocol crate should not bind `embassy_time::Duration`. Two options:
 
-- 由应用使用 executor 的 `with_timeout` 包裹 future；
-- backend 提供可选 deadline/timeout adapter。
+- the application wraps the future with the executor's `with_timeout`;
+- the backend provides an optional deadline/timeout adapter.
 
-超时后调用 `abort/recover`，避免下一次操作把旧 IRQ 当作新 completion。
+After a timeout, call `abort/recover` so that the next operation does not treat
+a stale IRQ as a new completion.
 
-## 13. Hardware backend 草图
+## 13. Hardware backend sketch
 
-CH32X035 backend 的职责：
+Responsibilities of the CH32X035 backend:
 
 ```rust
 struct Ch32x035Pioc<'d> {
@@ -546,67 +588,72 @@ struct Ch32x035Pioc<'d> {
 }
 ```
 
-实现顺序：
+Implementation order:
 
-1. 配置 AFIO/GPIO remap；
-2. `reset_halted` 写 `sys.ctrl` reset/ownership；
-3. 停钟时复制 program image 或 long payload 到共享 SRAM；
-4. `run` 释放 reset 并开启 clock；
-5. `write_data/read_data` 使用 volatile SFR；
-6. `start_command` 最后写 `cmd.in`，形成 release boundary；
-7. IRQ handler 只清 NVIC source、记录事件并 wake；
-8. future 被 poll 后读取/确认 PIOC IRQ 和 `cmd.out`。
+1. configure the AFIO/GPIO remap;
+2. `reset_halted` writes `sys.ctrl` reset/ownership;
+3. while the clock is stopped, copy the program image or long payload into
+   shared SRAM;
+4. `run` releases reset and enables the clock;
+5. `write_data`/`read_data` use volatile SFR accesses;
+6. `start_command` writes `cmd.in` last, forming the release boundary;
+7. the IRQ handler only clears the NVIC source, records the event, and wakes;
+8. after the future is polled, read and acknowledge the PIOC IRQ and `cmd.out`.
 
-需要通过 critical section 保证：
+Critical sections must guarantee that:
 
-- command payload 全部写完后才写 `cmd.in`；
-- IRQ handler 与任务不会同时 refill 同一 buffer；
-- RAM mode 写 SRAM 时 PIOC 确实停钟；
-- 同周期主机/PIOC SFR 写入遵循硬件“host wins”规则。
+- `cmd.in` is written only after the entire command payload;
+- the IRQ handler and the task never refill the same buffer concurrently;
+- PIOC is really clock-stopped while RAM mode writes SRAM;
+- same-cycle host/PIOC SFR writes follow the hardware "host wins" rule.
 
 ## 14. VM backend
 
-VM backend 应完成同一 trait：
+The VM backend should implement the same trait:
 
-| CommandPort 方法 | VM 行为 |
+| `CommandPort` method | VM behavior |
 |---|---|
 | `reset_halted` | host write `sys.ctrl` reset/claims |
 | `run` | host write clock-run/claims |
 | `write_data` | host write `d0..d31` |
-| `write_program_ram` | 写 VM 暴露的共享程序 SRAM窗口 |
+| `write_program_ram` | write the shared program SRAM window exposed by the VM |
 | `start_command` | host write `cmd.in` |
-| `wait_for_interrupt` | 执行 VM，直到 `interrupt_request` |
+| `wait_for_interrupt` | run the VM until `interrupt_request` |
 
-当前端到端测试在测试文件中实现了最小 VM adapter，覆盖 SFR WS2812 路径。VM 尚未
-公开“停钟时主机写 program SRAM”的接口，因此 long/RAM path 当前只由 mock 验证。
-下一步应给 `Machine` 增加受 clock-gate/reset 约束的 host program-memory API，而不是
-让 adapter 直接修改私有 `program` 数组。
+The current end-to-end test implements a minimal VM adapter inside the test
+file, covering the SFR WS2812 path. The VM does not yet expose an interface for
+"the host writes program SRAM while the clock is stopped", so the long/RAM path
+is currently validated by mocks only. The next step should add a host
+program-memory API to `Machine` constrained by clock-gate/reset, instead of
+having the adapter modify the private `program` array.
 
-## 15. 可行性验证
+## 15. Feasibility validation
 
-### 15.1 编译属性
+### 15.1 Compile properties
 
-- `pioc-programs` 使用 `#![no_std]`；
-- 生产依赖为空；
-- 不需要 allocator；
-- async trait 边界不需要装箱；
-- workspace 禁止 unsafe code 的规则仍生效。
+- `pioc-programs` uses `#![no_std]`;
+- production dependencies are empty;
+- no allocator is required;
+- async trait boundaries need no boxing;
+- the workspace rule forbidding unsafe code is still in effect.
 
-### 15.2 Mock 行为测试
+### 15.2 Mock behavior tests
 
-已验证：
+Verified:
 
-1. 一个纯红灯被编码为 `00 FF 00`；
-2. IO0 3-byte 自动选择 SFR command `03h`；
-3. IO1 3-byte 自动切换 RAM mode；
-4. 强制 IO1 SFR mode 返回 `SfrCommandCollision(0x43)`；
-5. RAM mode 写 payload、长度、pin 和 `0x80|bit_cycles`；
-6. DS18x20 命令 `41h/42h` 和 parasite flag 映射正确；
-7. 有符号温度 raw value 转换为 milli-Celsius。
+1. a pure red LED is encoded as `00 FF 00`;
+2. a 3-byte IO0 payload automatically selects the SFR command `03h`;
+3. a 3-byte IO1 payload automatically switches to RAM mode;
+4. forcing IO1 SFR mode returns `SfrCommandCollision(0x43)`;
+5. RAM mode writes payload, length, pin, and `0x80|bit_cycles`;
+6. DS18x20 commands `41h`/`42h` and the parasite flag map correctly;
+7. signed raw temperature values convert to milli-Celsius.
 
-### 15.3 官方 BIN 端到端测试
+### 15.3 Official BIN end-to-end test
 
-测试加载官方 `RGB1W.BIN` 到 `pioc-vm::Machine`，然后只通过高层 API 调用：
+The test loads the official `RGB1W.BIN` into `pioc-vm::Machine` and then uses
+only the high-level API (the test depends on the external WCH EVT directory and
+is skipped when it is absent):
 
 ```rust
 driver
@@ -614,93 +661,99 @@ driver
     .await?;
 ```
 
-VM trace 的 IO0 高脉宽被重新解码为：
+The IO0 high pulse widths in the VM trace decode back to:
 
 ```text
 00000000 11111111 00000000
    G        R        B
 ```
 
-测试没有直接写 `d0`、`cmd.in` 或 PC，证明高层 API 到官方 firmware ABI 的闭环成立。
+The test never writes `d0`, `cmd.in`, or the PC directly, proving that the loop
+from the high-level API to the official firmware ABI is closed.
 
-### 15.4 尚未验证
+### 15.4 Not yet verified
 
-- CH32X035 真机 IRQ future；
-- RAM long-mode 的 VM/真机端到端路径；
-- IO1 long-mode 真机输出；
-- DS18x20 presence、读取与 parasite strong pull-up 的主动外设模型；
-- UART/I²C 长数据 streaming；
-- 24 MHz firmware patch；
-- 取消、超时和中断竞争条件。
+- CH32X035 real-hardware IRQ future;
+- VM/real-hardware end-to-end path for RAM long mode;
+- IO1 long-mode output on real hardware;
+- DS18x20 presence, read, and parasite strong pull-up against an active device
+  model;
+- UART/I²C long-payload streaming;
+- the 24 MHz firmware patch;
+- cancellation, timeout, and interrupt races.
 
-## 16. 性能和容量
+## 16. Performance and capacity
 
 ### 16.1 WS2812
 
-| 路径 | 最大数据 | RGB 灯数量 | 主机参与 |
+| Path | Max data | RGB LEDs | Host involvement |
 |---|---:|---:|---|
-| SFR | 32 byte | 10 灯 + 2 byte | 一次写共享 SFR |
-| RAM | 3072 byte | 1024 灯 | 停钟时一次/分块写 SRAM |
+| SFR | 32 bytes | 10 LEDs + 2 bytes | write the shared SFRs once |
+| RAM | 3072 bytes | 1024 LEDs | write SRAM once or in chunks while the clock is stopped |
 
-RAM mode 不应在每个像素后 run/halt；原型先停钟，连续写所有像素，再一次启动。
+RAM mode should not run/halt after every pixel; the prototype stops the clock,
+writes all pixels contiguously, and starts once.
 
 ### 16.2 UART/I²C
 
-官方双缓冲意味着可实现零 heap streaming，但 IRQ service 的最坏延迟必须小于一个
-buffer 的线速耗尽时间。API 文档应提供：
+Official double buffering means heap-free streaming is possible, but the
+worst-case IRQ service latency must be less than the time one buffer drains at
+line rate. API documentation should provide:
 
 ```text
 service_budget = buffer_bytes * bits_per_byte / baud
 ```
 
-高波特率下可选择：
+At high baud rates one can:
 
-- 提高 IRQ 优先级；
-- 使用更大的共享 SRAM 协议；
-- 若芯片支持合适 DMA 路由，再在硬件 backend 内加 DMA；
-- 不应在通用协议层承诺 PIOC 本身具有 RP 风格 DMA FIFO。
+- raise the IRQ priority;
+- use a larger shared-SRAM protocol;
+- add DMA inside the hardware backend if the chip offers a suitable DMA route;
+- never promise RP-style DMA FIFOs from the generic protocol layer.
 
-## 17. 建议的落地阶段
+## 17. Proposed implementation phases
 
-### Phase 1：已完成原型
+### Phase 1: prototype (done)
 
-- `CommandPort`；
-- 类型化 error/status；
-- `Ws2812` SFR/RAM 选择；
-- `Ds18x20` legacy API；
-- mock 测试；
-- 官方 RGB1W BIN 的 VM 端到端测试。
+- `CommandPort`;
+- typed error/status;
+- `Ws2812` SFR/RAM selection;
+- `Ds18x20` legacy API;
+- mock tests;
+- VM end-to-end test against the official RGB1W BIN.
 
-### Phase 2：硬件与 VM backend
+### Phase 2: hardware and VM backends
 
-- `ProgramSpec`、`ProgramAbi`、`Loaded<B,P>`；
-- CH32X035 volatile register/SRAM backend；
-- Embassy-compatible IRQ future；
-- VM host program-RAM API；
-- timeout、abort、recover；
-- 真机逻辑分析仪校准 24/48 MHz。
+- `ProgramSpec`, `ProgramAbi`, `Loaded<B,P>`;
+- CH32X035 volatile register/SRAM backend;
+- Embassy-compatible IRQ future;
+- VM host program-RAM API;
+- timeout, abort, recover;
+- real-hardware logic-analyzer calibration at 24/48 MHz.
 
-### Phase 3：streaming
+### Phase 3: streaming
 
-- 拆分 `PiocControl/PiocRegisters/PiocEvents`；
-- UART TX/RX 双缓冲状态机；
-- `embedded-io-async` traits；
-- I²C controller `embedded-hal-async` trait；
-- target/IRQ service task；
-- overrun、framing、NACK 等错误。
+- split `PiocControl`/`PiocRegisters`/`PiocEvents`;
+- UART TX/RX double-buffered state machine;
+- `embedded-io-async` traits;
+- I²C controller `embedded-hal-async` trait;
+- target/IRQ service task;
+- overrun, framing, NACK, and similar errors.
 
-### Phase 4：通用 OneWire 和协议生态
+### Phase 4: generic OneWire and protocol ecosystem
 
-- 新 OneWire V2 firmware ABI；
-- reset/read/write/triplet/strong-pullup；
-- ROM search 与 DS18B20 scratchpad/CRC；
-- NEC、single-wire debug、I²C target；
-- 硬件 backend 与 VM peer-model 的共用协议测试向量。
+- new OneWire V2 firmware ABI;
+- reset/read/write/triplet/strong-pullup;
+- ROM search and DS18B20 scratchpad/CRC;
+- NEC, single-wire debug, I²C target;
+- shared protocol test vectors between the hardware backend and the VM peer
+  model.
 
-## 18. 最终建议
+## 18. Final recommendation
 
-`pioc-programs` 应采用 Embassy 的“Program + owned Driver + async operation”思想，
-但以 WCH 的 command/SFR/IRQ ABI 为核心。近期最合理的公开 API 是：
+`pioc-programs` should adopt Embassy's "Program + owned Driver + async
+operation" idea while centering on WCH's command/SFR/IRQ ABI. The most
+reasonable public API in the near term is:
 
 ```text
 ProgramSpec -> Loaded<B, Program>
@@ -708,10 +761,14 @@ ProgramSpec -> Loaded<B, Program>
              -> async protocol methods
 ```
 
-不要公开要求用户手工填写 `d0`、`d7`、`cmd.in=0x33` 的 API，也不要用一个过度
-抽象的通用 FIFO 掩盖不同固件的 buffer ABI。协议 driver 应成为固件 ABI 的唯一
-解释者；backend 只负责可靠地装载、读写、等待 IRQ 和恢复硬件。
+Do not expose an API that requires users to hand-fill `d0`, `d7`, or
+`cmd.in=0x33`, and do not hide different firmware buffer ABIs behind an
+over-generalized FIFO. The protocol driver should be the sole interpreter of the
+firmware ABI; the backend is only responsible for reliably loading, reading and
+writing, waiting for IRQs, and recovering the hardware.
 
-现有原型已经证明该方向在 Rust 类型系统、`no_std`、官方 RGB1W 固件和 VM 上均可行。
-下一项最高价值工作是实现正式 `ProgramSpec/Loaded` typestate 与 CH32X035/VM 两个
-backend，然后再以 UART 双缓冲验证 streaming 事件模型。
+The current prototype has shown that this direction is feasible on the Rust type
+system, `no_std`, the official RGB1W firmware, and the VM. The highest-value
+next step is to implement the formal `ProgramSpec`/`Loaded` typestate and the
+two backends (CH32X035/VM), then validate the streaming event model with UART
+double buffering.

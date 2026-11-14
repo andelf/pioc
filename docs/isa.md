@@ -175,7 +175,7 @@ accepted as migration aliases, but canonical output does not emit them.
 | `0A` | `pins.dir` | `SFR_PORT_DIR` | direction, pull and mode |
 | `0B` | `pins` | `SFR_PORT_IO` | inputs, XOR and outputs |
 | `0C` | `codec.ctrl` | `SFR_BIT_CONFIG` | codec configuration/status |
-| `0D..1B` | — | reserved | reads as zero; preserve on write |
+| `0D..1B` | — | reserved | unspecified; preserve or write zero |
 | `1C` | `sys.ctrl` | `SFR_SYS_CFG` | host ownership, handshake, IRQ |
 | `1D` | `cmd.out` | `SFR_CTRL_RD` | PIOC-to-host command byte |
 | `1E` | `cmd.in` | `SFR_CTRL_WR` | host-to-PIOC command byte |
@@ -204,3 +204,15 @@ selected bit position remains subject to hardware calibration.
 The PDF access table also places host-swapped GP Y/X fields on the Timer0 count
 row. Its prose and `PIOC_SFR.h` place those views at `timer0.ctrl[5:4]`; host
 tooling should follow the header/prose interpretation.
+
+## VM modeling notes
+
+The VM is a digital model, not a bit-exact silicon surrogate. Three deliberate
+simplifications matter when comparing traces against hardware:
+
+- Every `RCODE` space selector reads the single loaded program image; the VM
+  discards the selector bits.
+- Reserved SFR addresses `0D..1B` retain whatever the core or host writes;
+  reads do not force zero.
+- `status` bits `7:6` are stored verbatim on write and only bits `0`, `2` and
+  `5` are maintained by the core, so written `7:6` values read back.

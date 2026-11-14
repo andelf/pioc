@@ -1,7 +1,7 @@
 # PIOC research progress
 
-Last updated: 2026-10-09  
-Branch: `dev/pioc-research`
+Last updated: 2026-11-14
+Branch: `master` (`dev/pioc-research` was fast-forwarded into it on 2026-11-14)
 
 ## Current status
 
@@ -112,10 +112,11 @@ program/ABI states remain future work.
 ## Program construction APIs
 
 There is not yet a true Embassy-style `ProgramBuilder` or `Assembler` object.
-Programs can currently be constructed in three ways:
+Programs can currently be constructed through these paths:
 
-1. `pioc_asm_canonical!` for checked, compile-time assembly with labels;
-2. `assemble_canonical()` for runtime source assembly;
+1. `pioc_asm!`, `pioc_asm_canonical!` and `pioc_file!` for checked,
+   compile-time assembly with labels;
+2. `assemble_canonical()` and `assemble_legacy()` for runtime source assembly;
 3. direct `Instruction` values followed by `encode()` for small typed tests.
 
 The direct `Instruction` approach lacks labels, fixups, automatic address-zero
@@ -129,12 +130,47 @@ The current baseline passes:
 ```console
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 git diff --check
 ```
 
 It includes golden tests for all five official ASM/BIN pairs, canonical source
 translation, all-word lossless disassembly, CLI translation, VM behavior, and
 the high-level WS2812/DS18x20 APIs.
+
+The WCH golden tests need a CH32X035 EVT checkout at
+`../../ch32x035-main/EVT/EXAM/PIOC` and are skipped when that tree is absent, so
+on a bare clone only the self-contained tests run. The CH32H417EVT tree also
+carries PIOC examples, but its ASM sources differ from the X035 ones and cannot
+serve as the same golden corpus.
+
+## Alignment with the CH32H417EVT C examples
+
+Checked on 2026-11-14 against `/Users/mono/WCH/CH32H417EVT/EXAM/PIOC` (C host
+code, ASM/BIN firmware, `ch32h417_pioc.h`, `PIOC_INC.ASM`):
+
+- the legacy assembler reproduces all five H417 EVT BINs byte for byte, and the
+  `PIOC_1W_CODE[]` array in `RGB1W.c` equals `RGB1W.BIN`;
+- canonical disassembly of each BIN reassembles losslessly;
+- the RGB1W SFR path driven through `Ws2812::write_rgb` emits the expected
+  `00 FF 00` bit stream with status 0, 29/88-cycle task high times and a
+  117-cycle bit period (100 MHz firmware constants);
+- the RGB1W RAM path, with the payload at word `0x200` and lengths in `d0/d1`,
+  pin select in `d2`, and command `0x80|bit_cycles`, also completes with status
+  0 and 1/4 vs 3/4 duty codec pulses;
+- NEC, Single Wire, UART and IIC images execute without unsupported
+  instructions and settle in their expected `WAITB` states;
+- the host handshake matches the C drivers: reading `cmd.out` clears
+  `core_to_host_pending`, a false write to `cmd.out` clears only the interrupt
+  request, and the firmware clears the request after that acknowledgment.
+
+Known inconsistencies in the vendor material: `ch32h417_pioc.h` describes
+`timer0.ctrl` bits 5/4 as host GP Y/X, while `PIOC_INC.ASM` defines them as
+timer enable and output enable; the VM follows the include because that is what
+firmware execution depends on. The `status` bits 4/5 PDF-vs-include conflict
+remains unresolved, and no official firmware uses either bit. The H417 host
+sends `0x80|0x55` for IO1 RAM mode, but the firmware ignores the bit-cycle
+field on that software-encoded path.
 
 ## Commits
 
@@ -143,6 +179,7 @@ the high-level WS2812/DS18x20 APIs.
 - `312d24a` — ISA, simulation, and protocol API documentation
 - `642599b` — default WaveDrom slots to two cycles
 - `e669a18` — concise canonical PIOC dialect and EVT translations
+- `ab1e9d2` — save current progress notes
 
 ## Suggested next steps
 

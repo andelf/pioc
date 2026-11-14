@@ -17,7 +17,7 @@ those binaries without loss.
 | `pioc-parser` | WCH legacy and normalized canonical assembly syntax |
 | `pioc-proc` | `pioc_asm!`, `pioc_asm_canonical!` and `pioc_file!` compile-time assembly |
 | `pioc-vm` | CPU, SFR, host handshake, GPIO, Timer0, scenarios and waveforms |
-| `pioc-programs` | `no_std` Embassy-style WS2812/DS18x20 protocol APIs over hardware or VM backends |
+| `pioc-programs` | `no_std` Embassy-style WS2812/DS18x20 protocol APIs over a backend-neutral `CommandPort` |
 | `pioc` | command-line assembler, disassembler and VM runner |
 
 ## CLI
@@ -45,10 +45,14 @@ cargo run -p pioc -- disassemble --canonical --source program.bin -o program.pio
 cargo run -p pioc -- run program.bin \
   --scenario scenario.json \
   --pin0 z --pin1 high \
+  --max-steps 100000 --max-cycles 10000000 \
   --trace trace.jsonl \
   --wavejson waveform.json \
   --vcd waveform.vcd
 ```
+
+`--max-steps` (default 100,000) caps executed instructions and `--max-cycles`
+(default 10,000,000) caps simulated PIOC clocks.
 
 A scenario is a cycle-ordered JSON array. Addresses and values are decimal JSON
 numbers; for example, write data register 0 and then send command `1`:
