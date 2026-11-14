@@ -222,6 +222,20 @@ low 4 KiB program SRAM), streaming protocols that need more than one pending
 event, and a `Loaded` typestate. CH643's program-SRAM base is inferred from
 CH32X0.
 
+## License
+
+Dual licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Each crate carries both files, so a crate can be packaged on its
+own.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.
+
 ## Sources
 
 - [WCH support thread containing the manual, assembler and examples](https://www.wch.cn/bbs/thread-111140-1.html)
