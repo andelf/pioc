@@ -7,12 +7,17 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/andelf/pioc"
+homepage = "https://github.com/andelf/pioc"
 rust-version = "1.81"
+keywords = ["wch", "pioc", "ch32", "assembler", "embedded"]
+categories = ["embedded", "hardware-support", "development-tools::build-utils"]
 
 [workspace.dependencies]
-pioc-core = { path = "pioc-core" }
-pioc-parser = { path = "pioc-parser" }
-pioc-vm = { path = "pioc-vm" }
+# `version` alongside `path`: crates.io rejects a dependency that only has a
+# path, so every in-workspace crate carries both.
+pioc-core = { path = "pioc-core", version = "0.1.0" }
+pioc-parser = { path = "pioc-parser", version = "0.1.0" }
+pioc-vm = { path = "pioc-vm", version = "0.1.0" }
 clap = { version = "4.5", features = ["derive"] }
 proc-macro2 = "1"
 quote = "1"

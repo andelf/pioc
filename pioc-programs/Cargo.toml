@@ -1,14 +1,19 @@
 [package]
 name = "pioc-programs"
+description = "Embassy-style protocol drivers for the WCH PIOC command transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
 rust-version.workspace = true
 
 [dev-dependencies]
 pioc-parser.workspace = true
-pioc-proc = { path = "../pioc-proc" }
+pioc-proc = { path = "../pioc-proc", version = "0.1.0" }
 pioc-vm.workspace = true
 
 [lints]
