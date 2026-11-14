@@ -8,6 +8,19 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 #[test]
+fn version_is_reported() {
+    let output = Command::new(env!("CARGO_BIN_EXE_pioc"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("pioc {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
 fn source_disassembly_reassembles_exactly() {
     let directory = scratch("roundtrip");
     let input = directory.join("input.bin");

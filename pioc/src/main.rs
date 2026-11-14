@@ -8,7 +8,11 @@ use pioc_parser::{
 use pioc_vm::{run_scenario, to_vcd, to_wavejson, Machine, RunLimits, ScheduledEvent, WaveOptions};
 
 #[derive(Debug, Parser)]
-#[command(name = "pioc", about = "PIOC assembler, disassembler, and VM runner")]
+#[command(
+    name = "pioc",
+    version,
+    about = "PIOC assembler, disassembler, and VM runner"
+)]
 struct Args {
     #[command(subcommand)]
     command: Command,
