@@ -8,7 +8,7 @@ use pioc_programs::{CommandPort, Error, Firmware};
 
 use common::{block_on, expected_bits, Operation, VmPort};
 
-const RGB1W_48M: &[u16] = pioc_proc::pioc_file_canonical!("../examples/canonical/rgb1w.pio");
+const RGB1W_48M: &[u16] = pioc_proc::pioc_file_canonical!("tests/fixtures/rgb1w.pio");
 
 const FIRMWARE: Firmware = Firmware {
     words: RGB1W_48M,
@@ -28,6 +28,19 @@ fn bit_threshold(pulses: &[u64]) -> u64 {
         "payload must contain both zero and one bits, got {minimum} cycles for every bit"
     );
     (minimum + maximum) / 2
+}
+
+#[test]
+fn fixture_matches_the_workspace_example() {
+    let example =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/canonical/rgb1w.pio");
+    if !example.exists() {
+        return;
+    }
+    assert_eq!(
+        std::fs::read_to_string(example).unwrap(),
+        include_str!("fixtures/rgb1w.pio")
+    );
 }
 
 #[test]
