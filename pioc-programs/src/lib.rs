@@ -20,6 +20,22 @@ impl PinMask {
     }
 }
 
+/// A firmware image together with the assumptions baked into it.
+///
+/// The image is one half of the PIOC ABI: its command set, its payload offset
+/// and its SFR bit timing all have to agree with the driver configuration. The
+/// SFR path cannot reload the timing at run time — the delay loop is built out
+/// of `nop`s — so a mismatch must be detected instead of silently producing a
+/// wrong bit period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Firmware {
+    /// Little-endian instruction words, starting at program-SRAM offset 0.
+    pub words: &'static [u16],
+    /// Bit period the SFR path was assembled for. The RAM path takes its bit
+    /// period from `ws2812::Config::bit_cycles` instead.
+    pub sfr_bit_cycles: u8,
+}
+
 /// Low-level operations required by protocol drivers.
 ///
 /// A hardware implementation maps completion waiting to the PIOC interrupt.
@@ -84,11 +100,25 @@ impl FirmwareError {
 pub enum Error<E> {
     Backend(E),
     EmptyPayload,
-    PayloadTooLong { actual: usize, maximum: usize },
-    SfrCommandCollision { length: usize, command: u8 },
+    PayloadTooLong {
+        actual: usize,
+        maximum: usize,
+    },
+    SfrCommandCollision {
+        length: usize,
+        command: u8,
+    },
     ProgramRamUnavailable,
     InvalidBitCycles(u8),
     Firmware(FirmwareError),
+    /// The program RAM already holds a payload, which overwrites the tail of
+    /// the image, so the SFR path is no longer safe to use.
+    SfrUnavailable,
+    /// The image's SFR timing does not match the configured bit period.
+    SfrTimingMismatch {
+        image: u8,
+        configured: u8,
+    },
 }
 
 pub(crate) fn backend<E>(error: E) -> Error<E> {

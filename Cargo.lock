@@ -166,6 +166,7 @@ name = "pioc-programs"
 version = "0.1.0"
 dependencies = [
  "pioc-parser",
+ "pioc-proc",
  "pioc-vm",
 ]
 
