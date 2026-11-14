@@ -12,8 +12,6 @@ keywords = ["wch", "pioc", "ch32", "assembler", "embedded"]
 categories = ["embedded", "hardware-support", "development-tools::build-utils"]
 
 [workspace.dependencies]
-# `version` alongside `path`: crates.io rejects a dependency that only has a
-# path, so every in-workspace crate carries both.
 pioc-core = { path = "pioc-core", version = "0.1.0" }
 pioc-parser = { path = "pioc-parser", version = "0.1.0" }
 pioc-vm = { path = "pioc-vm", version = "0.1.0" }

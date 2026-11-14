@@ -20,8 +20,7 @@ impl OutputPin {
         }
     }
 
-    /// Claim only the pin the stream is driven from; RGB1W checks the
-    /// requested mask against the pin named in `d2` and rejects the rest.
+    /// Claim only the pin the stream is driven from.
     const fn mask(self) -> PinMask {
         match self {
             Self::Io0 => PinMask::IO0,
@@ -41,8 +40,7 @@ pub enum Storage {
 pub struct Config {
     pub output: OutputPin,
     pub storage: Storage,
-    /// Long/RAM-mode bit period in PIOC clocks. Official values are 56 at
-    /// 48 MHz and 28 at 24 MHz.
+    /// RAM-mode bit period in PIOC clocks.
     pub bit_cycles: u8,
 }
 
@@ -103,8 +101,7 @@ pub struct Ws2812<B> {
     port: B,
     firmware: Firmware,
     config: Config,
-    /// Once a payload has been written into program RAM the image tail is
-    /// gone, so every later transfer has to stay on the RAM path.
+    /// A RAM payload has overwritten the image tail.
     program_ram_dirty: bool,
 }
 
@@ -124,10 +121,6 @@ impl<B: CommandPort> Ws2812<B> {
     }
 
     /// Replace the configuration.
-    ///
-    /// Switching back to [`Storage::Sfr`] after a payload has been written is
-    /// reported as [`Error::SfrUnavailable`] on the next transfer rather than
-    /// silently corrupting the image.
     pub fn set_config(&mut self, config: Config) {
         self.config = config;
     }
@@ -221,10 +214,7 @@ impl<B: CommandPort> Ws2812<B> {
             Storage::Sfr => Ok(SelectedStorage::Sfr {
                 command: short_command,
             }),
-            // `Auto` picks the SFR path only when the image was assembled for
-            // the configured bit period and its code window is still intact.
-            // Otherwise it falls through to the RAM command, which carries the
-            // bit period in the command byte.
+            // Fall back to the RAM path when the SFR image is unusable.
             Storage::Auto
                 if short_fits
                     && !short_collides
@@ -260,8 +250,6 @@ impl<B: CommandPort> Ws2812<B> {
     }
 
     fn prepare_ram(&mut self, _length: usize) -> Result<(), Error<B::Error>> {
-        // The payload starts at 0x400 and overwrites the tail of the image, so
-        // the SFR path is closed for the rest of this driver's life.
         self.program_ram_dirty = true;
         self.port
             .reset_halted(self.config.output.mask())
@@ -285,10 +273,7 @@ impl<B: CommandPort> Ws2812<B> {
 
 /// Bit period in PIOC clocks for the 1.17 µs WS2812 bit at `hz` clocks.
 ///
-/// Returns `None` outside the range the RGB1W RAM command can encode (the
-/// command is `0x80 | bit_cycles`, and the firmware only accepts 8..=124), so
-/// a clock that cannot produce a valid period fails here instead of being
-/// silently truncated. 24 MHz, 48 MHz and 100 MHz give 28, 56 and 117.
+/// Returns `None` outside the 8..=124 range accepted by the RAM command.
 pub const fn bit_cycles_for_hz(hz: u32) -> Option<u8> {
     const BIT_PERIOD_NANOS: u64 = 1_170;
     let cycles = (BIT_PERIOD_NANOS * hz as u64 + 500_000_000) / 1_000_000_000;

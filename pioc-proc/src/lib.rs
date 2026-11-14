@@ -81,10 +81,6 @@ pub fn pioc_file(input: TokenStream) -> TokenStream {
 }
 
 /// Assemble a canonical PIOC file relative to the invoking crate's manifest.
-///
-/// The canonical dialect is what `pioc translate` emits from WCH legacy
-/// sources, so vendor firmware can be checked in as readable, reviewable
-/// source instead of an opaque binary.
 #[proc_macro]
 pub fn pioc_file_canonical(input: TokenStream) -> TokenStream {
     assemble_file(input, pioc_parser::Syntax::Canonical)

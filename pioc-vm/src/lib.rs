@@ -256,19 +256,11 @@ impl Machine {
         Ok(executed)
     }
 
-    /// Advance the machine by one tick.
-    ///
-    /// Executes an instruction, except when the core is stalled on an event
-    /// that the peripherals produce themselves (a codec edge or the timeout
-    /// timer): then only peripheral time moves forward. A host backend that
-    /// drives firmware waiting for its own PWM edge needs this; plain
-    /// [`Machine::step`] cannot leave that state.
+    /// Advance one tick, including peripheral time while the core waits.
     pub fn step_or_idle(&mut self) -> Result<StepOutcome, VmError> {
         let outcome = self.step()?;
         if outcome.cycles == 0 && self.waiting_can_advance_internally() {
-            // The wait is on a peripheral-generated edge, so advancing one
-            // cycle is what eventually satisfies it. `step` is retried on the
-            // next call to re-evaluate the condition against the new pins.
+            // A peripheral-generated edge will eventually satisfy the wait.
             self.idle_until(self.cycles + 1);
             return Ok(StepOutcome {
                 cycles: 1,
@@ -349,9 +341,7 @@ impl Machine {
     pub fn host_read(&mut self, address: u8) -> u8 {
         let value = self.registers[address as usize];
         if address as usize == COMMAND_OUT {
-            // Reading `cmd.out` is the interrupt acknowledge on silicon: it
-            // clears the core-to-host pending flag and the interrupt request
-            // that the core raised for it.
+            // Reading `cmd.out` acknowledges the interrupt on silicon.
             self.registers[SYSTEM_CONTROL] &= !SYS_CORE_TO_HOST_PENDING;
             self.registers[SYSTEM_CONTROL] &= !SYS_INTERRUPT_REQUEST;
         }
@@ -372,13 +362,7 @@ impl Machine {
         &self.program
     }
 
-    /// Write a little-endian byte image into the program SRAM window.
-    ///
-    /// `offset` is a byte offset from the start of the 4 KiB program SRAM, so
-    /// firmware that reads its payload with a word-addressed `RDCODE` at
-    /// `offset / 2` sees these bytes. Writes past the end of the loaded image
-    /// extend it with zero words, which mirrors hardware where the payload
-    /// lives in the same SRAM as the code.
+    /// Write a little-endian image at `offset` bytes into the 4 KiB program SRAM.
     pub fn write_program_ram(&mut self, offset: u16, data: &[u8]) -> Result<(), VmError> {
         let start = usize::from(offset);
         let end = start + data.len();
@@ -1412,8 +1396,7 @@ mod tests {
         let mut vm = machine(&[Instruction::Nop]);
         vm.write_program_ram(0x400, &[0x11, 0x22, 0x33]).unwrap();
 
-        // Payload offset 0x400 is word 0x200, which is what RGB1W's `RDCODE`
-        // addresses.
+        // Payload offset 0x400 is word 0x200.
         assert_eq!(vm.program()[0x200], 0x2211);
         assert_eq!(vm.program()[0x201], 0x0033);
         assert_eq!(

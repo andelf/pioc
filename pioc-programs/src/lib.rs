@@ -20,27 +20,16 @@ impl PinMask {
     }
 }
 
-/// A firmware image together with the assumptions baked into it.
-///
-/// The image is one half of the PIOC ABI: its command set, its payload offset
-/// and its SFR bit timing all have to agree with the driver configuration. The
-/// SFR path cannot reload the timing at run time — the delay loop is built out
-/// of `nop`s — so a mismatch must be detected instead of silently producing a
-/// wrong bit period.
+/// A firmware image and the SFR timing it was assembled for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Firmware {
     /// Little-endian instruction words, starting at program-SRAM offset 0.
     pub words: &'static [u16],
-    /// Bit period the SFR path was assembled for. The RAM path takes its bit
-    /// period from `ws2812::Config::bit_cycles` instead.
+    /// Bit period for the SFR path; the RAM path uses `Config::bit_cycles`.
     pub sfr_bit_cycles: u8,
 }
 
 /// Low-level operations required by protocol drivers.
-///
-/// A hardware implementation maps completion waiting to the PIOC interrupt.
-/// A simulator implementation can instead execute until firmware raises the
-/// same interrupt-request bit.
 pub trait CommandPort {
     type Error;
 
@@ -66,11 +55,7 @@ pub trait CommandPort {
     /// Write `cmd.in`, starting a firmware operation.
     fn start_command(&mut self, command: u8) -> Result<(), Self::Error>;
 
-    /// Wait for a PIOC interrupt, acknowledge it according to the backend's
-    /// hardware rules, and return the byte observed in `cmd.out`.
-    ///
-    /// Command-oriented firmware treats this as completion. Streaming
-    /// firmware may call it repeatedly for refill and receive events.
+    /// Wait for a PIOC interrupt and return the byte observed in `cmd.out`.
     fn wait_for_interrupt(&mut self) -> impl Future<Output = Result<u8, Self::Error>> + '_;
 }
 
@@ -111,8 +96,7 @@ pub enum Error<E> {
     ProgramRamUnavailable,
     InvalidBitCycles(u8),
     Firmware(FirmwareError),
-    /// The program RAM already holds a payload, which overwrites the tail of
-    /// the image, so the SFR path is no longer safe to use.
+    /// A RAM payload overwrote the image tail, so the SFR path is unavailable.
     SfrUnavailable,
     /// The image's SFR timing does not match the configured bit period.
     SfrTimingMismatch {

@@ -1,8 +1,4 @@
-//! End-to-end checks that run the real RGB1W image in the VM.
-//!
-//! The image comes from the checked-in canonical source, assembled at build
-//! time exactly the way a HAL example pulls in its firmware, so these tests
-//! need no vendor EVT tree.
+//! End-to-end checks for the real RGB1W image in the VM.
 
 mod common;
 
@@ -24,9 +20,6 @@ fn twelve_leds() -> [Rgb8; 12] {
 }
 
 /// Split the measured high times into zero and one bits.
-///
-/// Asserting that the payload really contains both kinds of bit keeps the
-/// threshold honest: a frame of only ones would make any threshold look right.
 fn bit_threshold(pulses: &[u64]) -> u64 {
     let minimum = *pulses.iter().min().expect("the firmware never drove IO0");
     let maximum = *pulses.iter().max().expect("the firmware never drove IO0");
@@ -68,8 +61,7 @@ fn twelve_leds_land_in_program_ram_and_stream_from_there() {
     block_on(driver.write_rgb(&colors, ColorOrder::Grb)).unwrap();
     let port = driver.release();
 
-    // `write_rgb` streams the payload three bytes at a time, so the write
-    // sequence starts at the ABI offset and advances by one colour.
+    // One RAM write per colour, starting at 0x400.
     let ram_writes = port
         .operations
         .iter()
@@ -80,8 +72,7 @@ fn twelve_leds_land_in_program_ram_and_stream_from_there() {
         .collect::<Vec<_>>();
     assert_eq!(ram_writes.len(), colors.len());
     assert_eq!(ram_writes[0], (0x400, payload[..3].to_vec()));
-    // The payload is read back by the firmware with word-addressed `RDCODE`,
-    // so byte offset 0x400 has to be word 0x200.
+    // Byte offset 0x400 is program word 0x200.
     let program = port.machine.program();
     for (index, pair) in payload.chunks(2).enumerate() {
         let low = u16::from(pair[0]);
@@ -107,8 +98,7 @@ fn alternating_frame_lengths_stay_on_the_program_ram_path() {
     block_on(driver.write_rgb(&[one], ColorOrder::Grb)).unwrap();
     block_on(driver.write_rgb(&colors, ColorOrder::Grb)).unwrap();
 
-    // Switching back after the image tail was overwritten must fail instead of
-    // driving the pin with a corrupted image.
+    // Switching back after the image tail was overwritten must fail.
     driver.set_config(Config {
         storage: Storage::Sfr,
         ..Config::default()
@@ -166,8 +156,7 @@ fn a_request_raised_before_the_wait_is_not_missed() {
     port.write_data(0, &[0x00, 0xff, 0x00]).unwrap();
     port.start_command(3).unwrap();
 
-    // Let the firmware finish before the driver starts waiting, so the request
-    // is already pending when `wait_for_interrupt` is entered.
+    // Finish the firmware before the driver starts waiting.
     let mut steps = 0;
     while port.machine.register(0x1c).unwrap() & 0x80 == 0 {
         port.machine.step_or_idle().unwrap();
