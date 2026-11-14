@@ -77,12 +77,26 @@ fn assemble_inline(input: TokenStream, canonical: bool) -> TokenStream {
 /// Assemble a legacy PIOC file relative to the invoking crate's manifest.
 #[proc_macro]
 pub fn pioc_file(input: TokenStream) -> TokenStream {
+    assemble_file(input, pioc_parser::Syntax::Legacy)
+}
+
+/// Assemble a canonical PIOC file relative to the invoking crate's manifest.
+///
+/// The canonical dialect is what `pioc translate` emits from WCH legacy
+/// sources, so vendor firmware can be checked in as readable, reviewable
+/// source instead of an opaque binary.
+#[proc_macro]
+pub fn pioc_file_canonical(input: TokenStream) -> TokenStream {
+    assemble_file(input, pioc_parser::Syntax::Canonical)
+}
+
+fn assemble_file(input: TokenStream, syntax: pioc_parser::Syntax) -> TokenStream {
     let path = parse_macro_input!(input as LitStr);
     let relative = path.value();
     let mut absolute =
         PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
     absolute.push(&relative);
-    match pioc_parser::assemble_file_with_dependencies(&absolute, pioc_parser::Syntax::Legacy) {
+    match pioc_parser::assemble_file_with_dependencies(&absolute, syntax) {
         Ok((program, dependencies)) => {
             let values = program.words;
             let dependencies = dependencies

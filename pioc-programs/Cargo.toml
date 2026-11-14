@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dev-dependencies]
 pioc-parser.workspace = true
+pioc-proc = { path = "../pioc-proc" }
 pioc-vm.workspace = true
 
 [lints]

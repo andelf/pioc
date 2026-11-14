@@ -105,6 +105,8 @@ pub enum VmError {
     EventOrder { previous: u64, cycle: u64 },
     #[error("scenario pin {pin} is invalid; PIOC has pins 0 and 1")]
     InvalidPin { pin: u8 },
+    #[error("program RAM write of {len} bytes at 0x{offset:03x} exceeds the 4 KiB window")]
+    ProgramRamRange { offset: u16, len: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +256,28 @@ impl Machine {
         Ok(executed)
     }
 
+    /// Advance the machine by one tick.
+    ///
+    /// Executes an instruction, except when the core is stalled on an event
+    /// that the peripherals produce themselves (a codec edge or the timeout
+    /// timer): then only peripheral time moves forward. A host backend that
+    /// drives firmware waiting for its own PWM edge needs this; plain
+    /// [`Machine::step`] cannot leave that state.
+    pub fn step_or_idle(&mut self) -> Result<StepOutcome, VmError> {
+        let outcome = self.step()?;
+        if outcome.cycles == 0 && self.waiting_can_advance_internally() {
+            // The wait is on a peripheral-generated edge, so advancing one
+            // cycle is what eventually satisfies it. `step` is retried on the
+            // next call to re-evaluate the condition against the new pins.
+            self.idle_until(self.cycles + 1);
+            return Ok(StepOutcome {
+                cycles: 1,
+                state: self.state,
+            });
+        }
+        Ok(outcome)
+    }
+
     pub fn register(&mut self, address: u16) -> Option<u8> {
         Register::new(address).map(|register| self.read_register(register))
     }
@@ -325,7 +349,11 @@ impl Machine {
     pub fn host_read(&mut self, address: u8) -> u8 {
         let value = self.registers[address as usize];
         if address as usize == COMMAND_OUT {
+            // Reading `cmd.out` is the interrupt acknowledge on silicon: it
+            // clears the core-to-host pending flag and the interrupt request
+            // that the core raised for it.
             self.registers[SYSTEM_CONTROL] &= !SYS_CORE_TO_HOST_PENDING;
+            self.registers[SYSTEM_CONTROL] &= !SYS_INTERRUPT_REQUEST;
         }
         self.trace.push(TraceEvent {
             cycle: self.cycles,
@@ -337,6 +365,52 @@ impl Machine {
             detail: None,
         });
         value
+    }
+
+    /// Loaded program words, including any host-written program-RAM payload.
+    pub fn program(&self) -> &[u16] {
+        &self.program
+    }
+
+    /// Write a little-endian byte image into the program SRAM window.
+    ///
+    /// `offset` is a byte offset from the start of the 4 KiB program SRAM, so
+    /// firmware that reads its payload with a word-addressed `RDCODE` at
+    /// `offset / 2` sees these bytes. Writes past the end of the loaded image
+    /// extend it with zero words, which mirrors hardware where the payload
+    /// lives in the same SRAM as the code.
+    pub fn write_program_ram(&mut self, offset: u16, data: &[u8]) -> Result<(), VmError> {
+        let start = usize::from(offset);
+        let end = start + data.len();
+        if end > PROGRAM_WORDS * 2 {
+            return Err(VmError::ProgramRamRange {
+                offset,
+                len: data.len(),
+            });
+        }
+        let last_word = end.div_ceil(2);
+        if self.program.len() < last_word {
+            self.program.resize(last_word, 0);
+        }
+        for (index, byte) in data.iter().copied().enumerate() {
+            let address = start + index;
+            let word = &mut self.program[address / 2];
+            if address % 2 == 0 {
+                *word = (*word & 0xff00) | u16::from(byte);
+            } else {
+                *word = (*word & 0x00ff) | (u16::from(byte) << 8);
+            }
+        }
+        self.trace.push(TraceEvent {
+            cycle: self.cycles,
+            kind: TraceKind::HostWrite,
+            pc: None,
+            word: None,
+            address: Some(offset),
+            value: None,
+            detail: Some(format!("program_ram {len}", len = data.len())),
+        });
+        Ok(())
     }
 
     pub fn trace(&self) -> &[TraceEvent] {
@@ -1317,6 +1391,51 @@ mod tests {
         );
         assert_eq!(vm.registers[SYSTEM_CONTROL] & SYS_INTERRUPT_REQUEST, 0);
         assert_eq!(vm.registers[COMMAND_OUT], 0xa5);
+    }
+
+    #[test]
+    fn reading_command_out_acknowledges_interrupt_and_pending() {
+        let mut vm = machine(&[Instruction::StoreAccumulator(Register::low(
+            COMMAND_OUT as u8,
+        ))]);
+        vm.accumulator = 0x3c;
+        vm.step().unwrap();
+        vm.registers[SYSTEM_CONTROL] |= SYS_INTERRUPT_REQUEST;
+
+        assert_eq!(vm.host_read(COMMAND_OUT as u8), 0x3c);
+        assert_eq!(vm.registers[SYSTEM_CONTROL] & SYS_INTERRUPT_REQUEST, 0);
+        assert_eq!(vm.registers[SYSTEM_CONTROL] & SYS_CORE_TO_HOST_PENDING, 0);
+    }
+
+    #[test]
+    fn program_ram_bytes_land_in_the_word_addressed_code_window() {
+        let mut vm = machine(&[Instruction::Nop]);
+        vm.write_program_ram(0x400, &[0x11, 0x22, 0x33]).unwrap();
+
+        // Payload offset 0x400 is word 0x200, which is what RGB1W's `RDCODE`
+        // addresses.
+        assert_eq!(vm.program()[0x200], 0x2211);
+        assert_eq!(vm.program()[0x201], 0x0033);
+        assert_eq!(
+            vm.write_program_ram(0x0ffe, &[0, 0, 0]),
+            Err(VmError::ProgramRamRange {
+                offset: 0x0ffe,
+                len: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn read_code_returns_host_written_program_ram() {
+        let mut vm = machine(&[Instruction::ReadCode { space: 3 }]);
+        vm.write_program_ram(0x400, &[0xcd, 0xab]).unwrap();
+        vm.set_indirect0(0);
+        vm.accumulator = 2;
+
+        vm.step().unwrap();
+
+        assert_eq!(vm.accumulator, 0xcd);
+        assert_eq!(vm.indirect_address0 & 0xff, 0xab);
     }
 
     #[test]
