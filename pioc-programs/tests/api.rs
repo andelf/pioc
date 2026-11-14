@@ -169,8 +169,7 @@ fn program_ram_use_is_sticky_for_later_short_frames() {
     let mut driver = Ws2812::new(MockPort::new(3072), FIRMWARE_48M, Config::default());
     block_on(driver.write_rgb(&twelve_leds(), ColorOrder::Grb)).unwrap();
 
-    // The same driver, now sending one LED. The image tail is gone, so `Auto`
-    // must stay on the RAM path even though three bytes would fit in the SFR.
+    // The image tail is gone, so `Auto` must stay on the RAM path.
     block_on(driver.write_rgb(&[Rgb8::new(1, 2, 3)], ColorOrder::Grb)).unwrap();
     let port = driver.release();
 
@@ -212,7 +211,7 @@ fn io1_three_byte_collision_automatically_uses_program_ram() {
         .contains(&Operation::WriteData(0, vec![3, 0])));
     assert!(port.operations.contains(&Operation::WriteData(2, vec![1])));
     assert!(port.operations.contains(&Operation::Command(0x80 | 56)));
-    // IO1 is claimed on its own; RGB1W rejects a mask that also covers IO0.
+    // IO1 is claimed on its own.
     assert!(port.operations.contains(&Operation::Reset(PinMask::IO1)));
     assert!(port.operations.contains(&Operation::Run(PinMask::IO1)));
 }

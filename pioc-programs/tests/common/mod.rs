@@ -1,9 +1,4 @@
-//! VM-backed `CommandPort` shared by the `pioc-programs` integration tests.
-//!
-//! The point of the VM backend is that the same driver code that runs against
-//! a peripheral on silicon also runs here, with only the register-level
-//! handshake replaced. Every host action is recorded in `operations`, so a
-//! test can assert the exact order the driver talks to the firmware in.
+//! VM-backed `CommandPort` for the `pioc-programs` integration tests.
 
 #![allow(dead_code)]
 
@@ -19,10 +14,6 @@ use pioc_vm::{Machine, RunState, TraceKind, VmError};
 pub const PROGRAM_RAM_CAPACITY: usize = 3072;
 
 /// Upper bound on VM instructions per interrupt wait.
-///
-/// A WS2812 frame of a few hundred bytes is tens of thousands of
-/// instructions, so this only trips when the firmware stalls on a pin that the
-/// VM never drives.
 const STEP_BUDGET: usize = 8_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,10 +91,6 @@ impl VmPort {
     }
 
     /// Decode the IO0 waveform into one bit per WS2812 bit slot.
-    ///
-    /// WS2812 codes a bit by the high time: a zero is roughly a third of the
-    /// period and a one roughly two thirds, so any threshold between them
-    /// works as long as it is derived from the measured pulses.
     pub fn bits(&self, long_threshold: u64) -> Vec<u8> {
         self.high_pulses()
             .into_iter()
@@ -177,8 +164,7 @@ impl CommandPort for VmPort {
         self.operations.push(Operation::Wait);
         for _ in 0..STEP_BUDGET {
             if self.machine.register(0x1c).unwrap_or(0) & 0x80 != 0 {
-                // Reading `cmd.out` is the interrupt acknowledge, exactly as
-                // the driver reads `CTRL_RD` on silicon.
+                // Reading `cmd.out` acknowledges the interrupt.
                 return Ok(self.machine.host_read(0x1d));
             }
             match self.machine.state {
