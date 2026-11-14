@@ -1,5 +1,3 @@
-
-
 [workspace]
 members = ["pioc-core", "pioc-parser", "pioc-proc", "pioc-vm", "pioc-programs", "pioc"]
 resolver = "2"
@@ -14,9 +12,7 @@ rust-version = "1.81"
 [workspace.dependencies]
 pioc-core = { path = "pioc-core" }
 pioc-parser = { path = "pioc-parser" }
-pioc-proc = { path = "pioc-proc" }
 pioc-vm = { path = "pioc-vm" }
-pioc-programs = { path = "pioc-programs" }
 clap = { version = "4.5", features = ["derive"] }
 proc-macro2 = "1"
 quote = "1"

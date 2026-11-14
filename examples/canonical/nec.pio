@@ -235,5 +235,3 @@ mcu_start:
     jmp mcu_start
 
     .end
-
-

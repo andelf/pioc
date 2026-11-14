@@ -229,6 +229,13 @@ fn translate_lines(lines: &[SourceLine], program_name: Option<&str>) -> Result<S
         }
         output.push('\n');
     }
+    // Vendor sources often end with comment and blank lines; a generated file
+    // only needs the final newline.
+    let trimmed = output.trim_end_matches([' ', '\t', '\n']).len();
+    if trimmed != output.len() {
+        output.truncate(trimmed);
+        output.push('\n');
+    }
     Ok(output)
 }
 
