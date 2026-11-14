@@ -169,8 +169,6 @@ assembled in tests and must reproduce the vendor BIN files byte for byte.
 
 See [docs/isa.md](docs/isa.md) for the complete instruction map and canonical
 syntax, and [docs/registers.md](docs/registers.md) for every SFR and bitfield.
-The high-level driver design and the Embassy comparison are in
-[docs/programs-api-design.md](docs/programs-api-design.md).
 
 ## VM scope
 
