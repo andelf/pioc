@@ -291,8 +291,10 @@ impl Machine {
                 self.registers[SYSTEM_CONTROL] |= SYS_HOST_TO_CORE_PENDING;
             }
             COMMAND_OUT => {
-                self.registers[SYSTEM_CONTROL] &=
-                    !(SYS_CORE_TO_HOST_PENDING | SYS_INTERRUPT_REQUEST);
+                // A spurious host write to `cmd.out` has no data effect and
+                // only clears the interrupt request. The pending bit is
+                // cleared by the host *reading* `cmd.out`, not by writing it.
+                self.registers[SYSTEM_CONTROL] &= !SYS_INTERRUPT_REQUEST;
             }
             SYSTEM_CONTROL => {
                 self.registers[SYSTEM_CONTROL] =
@@ -1294,6 +1296,27 @@ mod tests {
         assert_ne!(vm.registers[SYSTEM_CONTROL] & SYS_CORE_TO_HOST_PENDING, 0);
         assert_eq!(vm.host_read(COMMAND_OUT as u8), 0xa5);
         assert_eq!(vm.registers[SYSTEM_CONTROL] & SYS_CORE_TO_HOST_PENDING, 0);
+    }
+
+    #[test]
+    fn spurious_command_out_write_clears_only_the_interrupt_request() {
+        let mut vm = machine(&[Instruction::StoreAccumulator(Register::low(
+            COMMAND_OUT as u8,
+        ))]);
+        vm.accumulator = 0xa5;
+        vm.step().unwrap();
+        vm.registers[SYSTEM_CONTROL] |= SYS_INTERRUPT_REQUEST;
+
+        // WCH host code performs a false write (any value) to `cmd.out` to
+        // clear the interrupt flag without consuming the pending byte.
+        vm.host_write(COMMAND_OUT as u8, 11);
+
+        assert_eq!(
+            vm.registers[SYSTEM_CONTROL] & SYS_CORE_TO_HOST_PENDING,
+            SYS_CORE_TO_HOST_PENDING
+        );
+        assert_eq!(vm.registers[SYSTEM_CONTROL] & SYS_INTERRUPT_REQUEST, 0);
+        assert_eq!(vm.registers[COMMAND_OUT], 0xa5);
     }
 
     #[test]
