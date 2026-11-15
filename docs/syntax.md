@@ -333,5 +333,6 @@ pioc translate program.ASM -o program.pio
 pioc assemble --canonical program.pio -o program.bin
 ```
 
-`docs/isa.md` documents the encodings and semantics of every instruction;
-`docs/registers.md` documents the SFRs and bitfields in full.
+[`docs/reference.md`](reference.md) documents the semantics and encodings of
+every instruction, the VM architecture, and the host ABI;
+[`docs/registers.md`](registers.md) documents the SFRs and bitfields in full.

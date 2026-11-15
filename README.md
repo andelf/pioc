@@ -25,7 +25,7 @@ loads and the drivers that speak their command set.
 | | |
 |---|---|
 | CLI and crate API | [docs.rs/pioc](https://docs.rs/pioc) |
-| Instruction set and encodings | [docs/isa.md](docs/isa.md) |
+| Reference (instructions, VM, host ABI) | [docs/reference.md](docs/reference.md) |
 | Registers, SFRs and bitfields | [docs/registers.md](docs/registers.md) |
 | WCH legacy ↔ canonical syntax | [docs/syntax.md](docs/syntax.md) |
 | Example firmware | [examples/canonical](examples/canonical) |
